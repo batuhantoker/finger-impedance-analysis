@@ -25,6 +25,8 @@ env/
 *.xlsx
 *.txt
 !requirements.txt
+data/
+.env
 
 # Figures
 *.png
