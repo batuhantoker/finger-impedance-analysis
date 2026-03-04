@@ -1,15 +1,18 @@
+"""Regression analysis pipeline for Malesevic dataset.
+
+Loads preprocessed EMG features from pickle, trains MLP regressors to predict
+force/stiffness from EMG features, evaluates with multiple metrics, and generates
+publication-ready plots with movement annotations and per-finger comparisons.
+"""
+
 import pickle
+
 import matplotlib.pyplot as plt
 import numpy as np
-import time
-from sklearn.preprocessing import normalize
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import explained_variance_score
-from finger_impedance.core.functions import *
 import pandas as pd
+from sklearn.preprocessing import MinMaxScaler
 
-from scipy.signal import hilbert, find_peaks
-from sklearn.utils import resample
+from finger_impedance.core.functions import *
 plt.style.use('bmh')
 plt.rcParams["axes.spines.right"] = False
 plt.rcParams["axes.spines.top"] = False
