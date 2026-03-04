@@ -1,13 +1,19 @@
-from finger_impedance.core.functions import *
+"""Data preprocessing and stiffness analysis pipeline for Hyser dataset (all subjects).
+
+Reads per-subject pickle files, computes normalized stiffness across 20 subjects,
+and generates mean/max/std statistics with publication-quality plots.
+"""
+
 import matplotlib.pyplot as plt
-import latex
-import scienceplots
-import os
-print(os.environ['PATH'])
-plt.rcParams.update(plt.rcParamsDefault)
-plt.style.use(['science','no-latex','grid'])
-print(plt.style.available)
-#plt.rcParams["figure.figsize"] = (20,10)
+
+from finger_impedance.core.functions import *
+
+try:
+    import scienceplots
+    plt.rcParams.update(plt.rcParamsDefault)
+    plt.style.use(['science', 'no-latex', 'grid'])
+except ImportError:
+    plt.rcParams.update(plt.rcParamsDefault)
 
 finger_1=0
 dataset='mvc'
