@@ -1,0 +1,11 @@
+numpy
+scipy
+matplotlib
+scikit-learn
+pandas
+opencv-python
+h5py
+mat73
+samplerate
+scienceplots
+openpyxl
