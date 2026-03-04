@@ -122,9 +122,3 @@ Optional: `samplerate`, `scienceplots`, `opencv-python` (for image-based feature
 ## License
 
 MIT License — see [LICENSE.md](LICENSE.md).
-
-## Author
-
-**Batuhan Toker**
-MS Mechatronics Engineering, Sabanci University (2021)
-[GitHub](https://github.com/batuhantoker) · [LinkedIn](https://linkedin.com/in/batuhant)
