@@ -1,38 +1,17 @@
-from scipy.signal import butter, lfilter
+"""Multi-subject stiffness and force averaging/visualization for Malesevic dataset.
+
+Loads per-subject pickle files (4 subjects), normalizes stiffness/force with
+MinMaxScaler, computes cross-subject mean/std, and plots with confidence bands
+and movement annotations.
+"""
+
+import pickle
+
 import matplotlib.pyplot as plt
 import numpy as np
-import pickle, math
-from finger_impedance.core.functions import *
 from sklearn.preprocessing import MinMaxScaler
 
-
-def butter_lowpass_filter(data, cutoff, fs, order=5):
-    b, a = butter_lowpass(cutoff, fs, order=order)
-    y = lfilter(b, a, data)
-    return y
-
-
-def butter_lowpass(cutoff, fs, order=5):
-    return butter(order, cutoff, fs=fs, btype="low", analog=False)
-
-
-def NormalizeData(data):
-    return (data - np.min(data)) / (np.max(data) - np.min(data))
-
-
-def rms(data, epoch):
-    number_of_segments = math.trunc(len(data) / epoch)
-    splitted_data = np.split(
-        data[0 : number_of_segments * epoch, :], number_of_segments
-    )
-    RMS = np.empty([number_of_segments, data.shape[1]])
-    for i in range(number_of_segments):
-        RMS[i, :] = np.mean(
-            splitted_data[i], axis=0
-        )  # np.sqrt(np.mean(np.square(splitted_data[i]), axis=0))
-
-    return RMS
-
+from finger_impedance.core.functions import *
 
 plt.style.use("bmh")
 plt.rcParams["axes.spines.right"] = False
