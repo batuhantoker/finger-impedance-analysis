@@ -1,41 +1,51 @@
-# Functions used to analyze EMG/force data
+"""Core utility functions for EMG/force signal processing and analysis.
 
-from sklearn.preprocessing import MinMaxScaler
-import pickle
-from itertools import chain
+Provides Butterworth filters, EMG preprocessing, feature extraction
+(time and frequency domain), stiffness estimation, regression metrics,
+and ML classification helpers.
+"""
+
 import math
-import numpy as np
-from scipy import signal
-from scipy.signal import butter, sosfilt, sosfreqz, lfilter, freqz
-from sklearn import model_selection
-from sklearn.linear_model import LogisticRegression
-from sklearn.svm import SVC
-from sklearn.metrics import classification_report, accuracy_score, make_scorer
-from numpy.fft import fft, ifft
-from scipy.optimize import curve_fit
-from finger_impedance.core.tfestimate import *
-from sklearn.metrics import mean_squared_error, mean_absolute_percentage_error
+from typing import Dict, List, Optional, Tuple
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from sklearn.metrics import mean_absolute_error, mean_squared_error
-from sklearn.metrics import r2_score
-from numpy.lib.stride_tricks import sliding_window_view
-from sklearn.metrics import plot_confusion_matrix
+from numpy.fft import fft
+from scipy import signal
+from scipy.signal import butter, lfilter
+from sklearn import model_selection
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (
+    accuracy_score,
+    make_scorer,
+    mean_absolute_error,
+    mean_absolute_percentage_error,
+    mean_squared_error,
+    r2_score,
+)
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.svm import SVC
+
+from finger_impedance.core.tfestimate import tfest
 
 np.seterr(divide="ignore")
 
 
-def butter_lowpass(cutoff, fs, order=5):
+def butter_lowpass(cutoff: float, fs: float, order: int = 5) -> Tuple[np.ndarray, np.ndarray]:
+    """Design a lowpass Butterworth filter and return (b, a) coefficients."""
     return butter(order, cutoff, fs=fs, btype="low", analog=False)
 
 
-def butter_lowpass_filter(data, cutoff, fs, order=5):
+def butter_lowpass_filter(data: np.ndarray, cutoff: float, fs: float, order: int = 5) -> np.ndarray:
+    """Apply a lowpass Butterworth filter to data."""
     b, a = butter_lowpass(cutoff, fs, order=order)
     y = lfilter(b, a, data)
     return y
 
 
-def butter_bandpass(lowcut, highcut, fs, order=5):
+def butter_bandpass(lowcut: float, highcut: float, fs: float, order: int = 5) -> Tuple[np.ndarray, np.ndarray]:
+    """Design a bandpass Butterworth filter and return (b, a) coefficients."""
     nyq = 0.5 * fs
     low = lowcut / nyq
     high = highcut / nyq
@@ -43,74 +53,102 @@ def butter_bandpass(lowcut, highcut, fs, order=5):
     return b, a
 
 
-def zero_lag_filter(data, lowcut, highcut, fs, order=5):
+def zero_lag_filter(data: np.ndarray, lowcut: float, highcut: float, fs: float, order: int = 5) -> np.ndarray:
+    """Apply a zero-lag (forward-backward) bandpass Butterworth filter."""
     b, a = butter_bandpass(lowcut, highcut, fs, order=order)
     y = signal.filtfilt(b, a, data)
     return y
 
 
-def data_preprocess(emg_data, fs, lowcut, highcut, cutoff):
+def data_preprocess(emg_data: np.ndarray, fs: float, lowcut: float, highcut: float, cutoff: float) -> np.ndarray:
+    """Preprocess EMG data: bandpass filter and full-wave rectification.
+
+    Args:
+        emg_data: Raw EMG signal array.
+        fs: Sampling frequency in Hz.
+        lowcut: Lower cutoff frequency for bandpass filter.
+        highcut: Upper cutoff frequency for bandpass filter.
+        cutoff: Lowpass cutoff (currently unused, kept for API compatibility).
+
+    Returns:
+        Filtered and rectified EMG signal.
+    """
     print("Data filtering...")
     emg_ = zero_lag_filter(emg_data, lowcut, highcut, fs, order=4)
     emg_ = abs(emg_)
-    # emg_ = butter_lowpass_filter(emg_rect, cutoff, fs, 4)
-    # emg_=samplerate.resample(emg_,0.5)
     return emg_
 
 
-def rolling_rms(x):
-    N = 150
+def rolling_rms(x: np.ndarray, window_size: int = 150) -> np.ndarray:
+    """Compute rolling RMS of a signal using cumulative sum method."""
     xc = np.cumsum(abs(x) ** 2)
-    return np.sqrt((xc[N:] - xc[-N]) / N)
+    return np.sqrt((xc[window_size:] - xc[:-window_size]) / window_size)
 
 
-def mape(real, estimate):
+def mape(real: np.ndarray, estimate: np.ndarray) -> float:
+    """Compute Mean Absolute Percentage Error."""
     return mean_absolute_percentage_error(real, estimate)
 
 
-def rmse(real, estimate):
+def rmse(real: np.ndarray, estimate: np.ndarray) -> float:
+    """Compute Root Mean Squared Error."""
     return mean_squared_error(real, estimate, squared=False)
 
 
-def nrmse1(real, estimate):
+def nrmse1(real: np.ndarray, estimate: np.ndarray) -> float:
+    """Compute NRMSE normalized by peak-to-peak range of absolute values."""
     return rmse(real, estimate) / (np.max(np.abs(real)) - np.min(np.abs(real)))
 
 
-def nrmse2(real, estimate):
+def nrmse2(real: np.ndarray, estimate: np.ndarray) -> float:
+    """Compute NRMSE normalized by maximum absolute value."""
     return rmse(real, estimate) / (np.max(np.abs(real)))
 
 
-def rmspe(real, estimate):
+def rmspe(real: np.ndarray, estimate: np.ndarray) -> float:
+    """Compute Root Mean Square Prediction Error."""
     return np.linalg.norm(estimate - real) / np.sqrt(len(real))
 
 
-def vaf(real, estimate):
-    return 100 * (
-        1 - (np.var(real - estimate) / np.var(estimate))
-    )  # 100*(1-(np.sum((real-estimate)**2)/np.sum((estimate**2))))
+def vaf(real: np.ndarray, estimate: np.ndarray) -> float:
+    """Compute Variance Accounted For (VAF) as a percentage."""
+    return 100 * (1 - (np.var(real - estimate) / np.var(estimate)))
 
 
-def r_square(real, estimate):
+def r_square(real: np.ndarray, estimate: np.ndarray) -> float:
+    """Compute coefficient of determination (R-squared)."""
     residuals = real - estimate
     ss_res = np.sum(residuals**2)
     ss_tot = np.sum((real - np.mean(real)) ** 2)
     return 1 - (ss_res / ss_tot)
 
 
-def force_mean(data, epoch):
+def force_mean(data: np.ndarray, epoch: int) -> np.ndarray:
+    """Compute epoch-wise mean of multi-channel force data.
+
+    Args:
+        data: 2D array of shape (n_samples, n_channels).
+        epoch: Number of samples per epoch window.
+
+    Returns:
+        Array of shape (n_segments, n_channels) with mean values per epoch.
+    """
     number_of_segments = math.trunc(len(data) / epoch)
     splitted_data = np.split(
         data[0 : number_of_segments * epoch, :], number_of_segments
     )
-    RMS = np.empty([number_of_segments, data.shape[1]])
+    result = np.empty([number_of_segments, data.shape[1]])
     for i in range(number_of_segments):
-        RMS[i, :] = np.mean(
-            splitted_data[i], axis=0
-        )  # np.sqrt(np.mean(np.square(splitted_data[i]), axis=0))
-    return RMS
+        result[i, :] = np.mean(splitted_data[i], axis=0)
+    return result
 
 
-def force_window(splitted_data):
+def force_window(splitted_data: List[np.ndarray]) -> List[np.ndarray]:
+    """Create overlapping windows by concatenating adjacent segments.
+
+    Each segment is combined with its neighbors to form a wider analysis window.
+    Boundary segments reuse nearby segments to maintain consistent window size.
+    """
     new_data = []
 
     for i in range(len(splitted_data)):
@@ -120,37 +158,50 @@ def force_window(splitted_data):
                     (splitted_data[i], splitted_data[i + 1], splitted_data[i + 2])
                 )
             )
-        if i != 0 and i != len(splitted_data) - 2 and i != len(splitted_data) - 1:
+        elif i < len(splitted_data) - 2:
             new_data.append(
                 np.concatenate(
                     (splitted_data[i - 1], splitted_data[i], splitted_data[i + 1])
                 )
             )
-        if (
-            i == len(splitted_data)
-            or i == len(splitted_data) - 1
-            or i == len(splitted_data) - 2
-        ):
+        else:
             new_data.append(
                 np.concatenate(
                     (splitted_data[i], splitted_data[i - 1], splitted_data[i - 2])
                 )
             )
-        # print(i,len(splitted_data))
     return new_data
 
 
-def stiffness(freq, K):  #
+def stiffness(freq: np.ndarray, K: float) -> np.ndarray:
+    """Compute stiffness magnitude response: |K / (j*freq)|."""
     return np.absolute(-K * 1j / (freq))
 
 
-def bode_plot(w, mag):
+def bode_plot(w: np.ndarray, mag: np.ndarray) -> None:
+    """Plot a Bode magnitude diagram."""
     plt.title("Bode magnitude plot")
     plt.semilogx(w, mag, "x")
     plt.grid()
 
 
-def feature_extraction(data, epoch):
+def feature_extraction(data: np.ndarray, epoch: int) -> Tuple[
+    np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray,
+    np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray,
+]:
+    """Extract time-domain and frequency-domain features from multi-channel EMG.
+
+    Time-domain features: RMS, MAV, IAV, VAR, WL.
+    Frequency-domain features: MF (mean freq), PF (peak freq), MP (mean power),
+    TP (total power), SM (spectral moment).
+
+    Args:
+        data: 2D array of shape (n_samples, n_channels).
+        epoch: Number of samples per epoch window.
+
+    Returns:
+        Tuple of 10 feature arrays, each (n_segments, n_channels).
+    """
     print("Feature extraction...")
     number_of_segments = math.trunc(len(data) / epoch)
     splitted_data = np.split(
@@ -166,10 +217,9 @@ def feature_extraction(data, epoch):
     MP = np.empty([number_of_segments, data.shape[1]])
     TP = np.empty([number_of_segments, data.shape[1]])
     SM = np.empty([number_of_segments, data.shape[1]])
-    # max_ind = np.empty([number_of_segments, 4])
+
     for i in range(number_of_segments):
         RMS[i, :] = np.sqrt(np.mean(np.square(splitted_data[i]), axis=0))
-        # max_ind [i,:] = RMS[i,:][np.argpartition(RMS[i,:],5, axis=0)]
         MAV[i, :] = np.mean(np.abs(splitted_data[i]), axis=0)
         IAV[i, :] = np.sum(np.abs(splitted_data[i]), axis=0)
         VAR[i, :] = np.var(splitted_data[i], axis=0)
@@ -183,10 +233,11 @@ def feature_extraction(data, epoch):
         MP[i, :] = np.mean(power, axis=0)  # Mean power
         TP[i, :] = np.sum(power, axis=0)  # Total power
         SM[i, :] = np.sum(fp, axis=0)  # Spectral moment
-    return RMS, MAV, IAV, VAR, WL, MF, PF, MP, TP, SM  # , max_ind
+    return RMS, MAV, IAV, VAR, WL, MF, PF, MP, TP, SM
 
 
-def class_map(data, epoch):
+def class_map(data: np.ndarray, epoch: int) -> np.ndarray:
+    """Compute epoch-wise mean for class/label signals."""
     number_of_segments = math.trunc(len(data) / epoch)
     splitted_data = np.split(data[0 : number_of_segments * epoch], number_of_segments)
     class_value = np.empty([number_of_segments])
@@ -195,20 +246,25 @@ def class_map(data, epoch):
     return class_value
 
 
-def classification_report_with_accuracy_score(y_true, y_pred):
-    return accuracy_score(y_true, y_pred)  # return accuracy score
+def classification_report_with_accuracy_score(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    """Scoring function returning accuracy for use with cross_val_score."""
+    return accuracy_score(y_true, y_pred)
 
 
-def classifier(features, labels, k_fold):
+def classifier(features: np.ndarray, labels: np.ndarray, k_fold: int) -> None:
+    """Run k-fold cross-validation with multiple classifiers and plot results.
+
+    Args:
+        features: Feature matrix of shape (n_samples, n_features).
+        labels: Class labels of shape (n_samples,).
+        k_fold: Number of cross-validation folds.
+    """
     Y = labels
     X = features
-    number_of_k_fold = k_fold
     random_seed = 42
     outcome = []
     model_names = []
-    # Variables for average classification report
-    originalclass = []
-    classification = []
+
     models = [
         ("LogReg", LogisticRegression()),
         ("SVM", SVC()),
@@ -223,7 +279,7 @@ def classifier(features, labels, k_fold):
 
     for model_name, model in models:
         k_fold_validation = model_selection.KFold(
-            n_splits=number_of_k_fold, random_state=random_seed, shuffle=True
+            n_splits=k_fold, random_state=random_seed, shuffle=True
         )
         results = model_selection.cross_val_score(
             model,
@@ -240,157 +296,89 @@ def classifier(features, labels, k_fold):
             results.std(),
         )
         print(output_message)
-    print(classification)
+
     fig = plt.figure()
     fig.suptitle("Machine Learning Model Comparison")
     ax = fig.add_subplot(111)
     plt.boxplot(outcome)
     plt.ylabel("Accuracy [%]")
     ax.set_xticklabels(model_names)
-    fig2 = plt.figure()
     plt.show()
-    # plt.savefig('myimage.png', format='png')
 
 
-def force_stiffness(data, epoch):
+def force_stiffness(data: np.ndarray, epoch: int) -> np.ndarray:
+    """Estimate stiffness from force data using FFT-based transfer function estimation.
+
+    For each epoch and channel, fits a transfer function to estimate
+    the DC stiffness magnitude (lowest frequency component).
+
+    Args:
+        data: 2D force array of shape (n_samples, n_channels).
+        epoch: Number of samples per epoch window.
+
+    Returns:
+        Stiffness estimates of shape (n_segments, n_channels).
+    """
     print("Stiffness estimation...")
     number_of_segments = math.trunc(len(data) / epoch)
     splitted_data = np.split(
         data[0 : number_of_segments * epoch, :], number_of_segments
     )
-    # splitted_data = force_window(splitted_data)
-    RMS = np.empty([number_of_segments, data.shape[1]])
     stiffness_estimation = np.empty([number_of_segments, data.shape[1]])
-    estimation_r2 = np.empty([number_of_segments, data.shape[1]])
     sr = 2048
-    # sampling interval
-    ts = 1.0 / sr
 
     for i in range(number_of_segments):
         k = []
-        r2 = []
-        # RMS[i, :] = np.mean(splitted_data[i], axis=0)#np.sqrt(np.mean(np.square(splitted_data[i]), axis=0))
-        for j in range(RMS.shape[1]):
+        for j in range(data.shape[1]):
             x = splitted_data[i][:, j]
-            y = np.ones(len(x))  # *-1
+            y = np.ones(len(x))
             tf = tfest(y, x)
             tf.estimate(0, 0, sr, method="fft")
             w1, mag1 = tf.bode_estimate()
-
             k.append(mag1[0])
-
         stiffness_estimation[i, :] = k
     return stiffness_estimation
 
 
-def moving_average(a, n=3):
+def moving_average(a: np.ndarray, n: int = 3) -> np.ndarray:
+    """Compute moving average with padding to maintain output length."""
     ret = np.cumsum(a, dtype=float)
     ret = np.append(ret, [ret[-1] * (np.ones(n - 1))])
     ret[n:] = ret[n:] - ret[:-n]
     return ret[n - 1 :] / n
 
 
-def pct_change(df):
+def pct_change(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute percentage change relative to the first row."""
     pct = 1 - df.iloc[0] / df
     return pct
 
 
-def running_mean(x, N):
+def running_mean(x: np.ndarray, N: int) -> np.ndarray:
+    """Compute running mean using cumulative sum method."""
     cumsum = np.cumsum(np.insert(x, 0, 0))
     return (cumsum[N:] - cumsum[:-N]) / float(N)
 
 
-def force_stiffness_v0(data, epoch):
-    print("Stiffness estimation...")
-    number_of_segments = math.trunc(len(data) / epoch)
-    splitted_data = np.split(
-        data[0 : number_of_segments * epoch, :], number_of_segments
-    )
-    splitted_data = force_window(splitted_data)
-    RMS = np.empty([number_of_segments, data.shape[1]])
-    stiffness_estimation = np.empty([number_of_segments, data.shape[1]])
-    estimation_r2 = np.empty([number_of_segments, data.shape[1]])
-    sr = 2048
-    # sampling interval
-    ts = 1.0 / sr
+def evaluate_regression_metrics(y_pred: np.ndarray, y_true: np.ndarray, index: str) -> pd.DataFrame:
+    """Evaluate a comprehensive set of regression metrics.
 
-    for i in range(number_of_segments):
-        k = []
-        r2 = []
-        # RMS[i, :] = np.mean(splitted_data[i], axis=0)#np.sqrt(np.mean(np.square(splitted_data[i]), axis=0))
-        for j in range(RMS.shape[1]):
-            x = splitted_data[i][:, j]
-            X = fft(x)
-            X = np.nan_to_num(X)  # Converts NaN to 0
-            N = len(X)
-            n = np.arange(N)
-            T = N / sr
-            freq = np.fft.fftfreq(len(x), ts) * 6.28
-            t = np.arange(0, ts * N, ts)
-            # plt.figure(figsize = (12, 6))
-            X = X[1:]
-            freq = freq[1:]
-            X = X[: len(X) // 2]
-            freq = freq[: len(freq) // 2]
+    Args:
+        y_pred: Predicted values.
+        y_true: Ground truth values.
+        index: Label for the resulting DataFrame row.
 
-            # plt.subplot(121)
-            # amp = 20 * np.log10((np.absolute(X)))
-
-            popt, pcov = curve_fit(stiffness, freq, np.absolute(X))
-            rsquare = r_square(np.absolute(X), stiffness(freq, *popt))
-            k.append(popt[0])
-            r2.append(rsquare)
-        stiffness_estimation[i, :] = k
-        estimation_r2[i, :] = r2
-    return stiffness_estimation, estimation_r2
-
-
-def evaluate_regression_metrics(y_pred, y_true, index):
-    # Calculate mean/median of prediction
-    mean_pred = np.mean(y_pred)
-    median_pred = np.median(y_pred)
-
-    # Calculate standard deviation of prediction
-    std_pred = np.std(y_true - y_pred)
-
-    # Calculate range of prediction
-    range_pred = max(y_pred) - min(y_pred)
-
-    # Calculate coefficient of determination (R2)
+    Returns:
+        Single-row DataFrame with R2, MAE, MSE, RMSEP, VAF, RMSE, nRMSE1, nRMSE2.
+    """
     r2 = r2_score(y_true, y_pred)
-
-    # Calculate relative standard deviation/coefficient of variation (RSD)
-    rsd = std_pred / mean_pred
-
-    # Calculate relative squared error (RSE)
-    rse = np.sqrt(mean_squared_error(y_true, y_pred)) / mean_pred
-
-    # Calculate mean absolute error (MAE)
     mae = mean_absolute_error(y_true, y_pred)
-
-    # Calculate relative absolute error (RAE)
-    rae = mae / mean_pred
-
-    # Calculate mean squared error (MSE)
     mse = mean_squared_error(y_true, y_pred)
-
-    # Calculate root mean squared error on prediction (RMSE/RMSEP)
-    rmsep = np.sqrt(mean_squared_error(y_true, y_pred))
-
-    # Calculate normalized root mean squared error (norm RMSEP)
-    norm_rmsep = rmsep / mean_pred
-
-    # vaf
+    rmsep = np.sqrt(mse)
     vaf_value = vaf(y_true, y_pred)
-
-    # Calculate relative root mean squared error (RRMSEP)
-    rrmsep = rmsep / std_pred
-
-    # Calculate relative root mean squared error (RRMSEP)
     nrmse_value1 = nrmse1(y_true, y_pred)
     nrmse_value2 = nrmse2(y_true, y_pred)
 
-    # Create a dictionary of the regression metrics
     metrics = {
         "R2": r2 * 100,
         "MAE": mae,
@@ -402,8 +390,5 @@ def evaluate_regression_metrics(y_pred, y_true, index):
         "nRMSE2": nrmse_value2 * 100,
     }
 
-    # Create a Pandas DataFrame of the regression metrics
     metrics_df = pd.DataFrame(metrics, index=[index])
-
-    # Return the DataFrame
     return metrics_df
