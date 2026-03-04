@@ -1,15 +1,17 @@
-import pandas as pd
+"""EMG feature-based gesture classifier using extracted pickle data.
+
+Combines time-domain and frequency-domain features, evaluates multiple classifiers
+(LogReg, SVM, LDA, KNN, MLP, RFC, etc.) via k-fold cross-validation, outputs
+boxplot comparison.
+"""
+
+import pickle
+
 import numpy as np
-from sklearn.preprocessing import StandardScaler
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-from sklearn.metrics import confusion_matrix
-from sklearn.metrics import accuracy_score
+import pandas as pd
+from sklearn.metrics import accuracy_score, classification_report
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-from sklearn import svm
-from sklearn.metrics import classification_report
-import numpy as np
-import pickle
 
 with open("data_s1_1_2.pkl.pkl", "rb") as handle:
     features = pickle.load(handle)
@@ -133,9 +135,6 @@ number_of_k_fold = 10
 random_seed = 42
 outcome = []
 model_names = []
-# Variables for average classification report
-originalclass = []
-classification = []
 models = [
     ("LogReg", LogisticRegression()),
     ("SVM", SVC()),
@@ -148,7 +147,8 @@ models = [
     # ('ABC', AdaBoostClassifier())
 ]
 # Make our customer score
-def classification_report_with_accuracy_score(y_true, y_pred):
+def classification_report_with_accuracy_score(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    """Compute classification report and return accuracy score for use as a scorer."""
     report = classification_report(y_true, y_pred, output_dict=True)
     # classes_list=list(report.keys())
     # classes=report.keys()
@@ -173,7 +173,6 @@ for model_name, model in models:
     model_names.append(model_name)
     output_message = "%s| Mean=%f STD=%f" % (model_name, results.mean(), results.std())
     print(output_message)
-print(classification)
 fig = plt.figure()
 fig.suptitle("Machine Learning Model Comparison")
 ax = fig.add_subplot(111)
