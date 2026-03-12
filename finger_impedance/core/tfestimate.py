@@ -2,11 +2,10 @@ import warnings
 
 import matplotlib.pyplot as plt
 import numpy as np
-
-from matplotlib.mlab import psd, csd
+from matplotlib.mlab import csd, psd
 from numpy.fft import fft, fftfreq
-from scipy.optimize import minimize
 from scipy import signal
+from scipy.optimize import minimize
 
 
 class tfest:
@@ -45,10 +44,9 @@ class tfest:
 
         return: transfer function and frequency
         """
-        if time == None:
+        if time is None:
             warnings.warn("Setting default time=1")
             time = 1
-        dt = time / len(self.u)
         if method == "fft":
             u_f = fft(self.u)
             y_f = fft(self.y)
@@ -91,7 +89,9 @@ class tfest:
 
         x0 = np.random.normal(init_value, 1, nzeros + npoles)
         H, frequency = self.transfer_function_H(Fs,method=method, time=time)
-        pass_to_loss = lambda x: self.loss(x, nzeros, frequency, H, l1)
+        def pass_to_loss(x):
+            return self.loss(x, nzeros, frequency, H, l1)
+
         self.res = minimize(pass_to_loss, x0, method='nelder-mead', options=options)
         return self.res
 
@@ -99,7 +99,7 @@ class tfest:
         """
         return: transfer function
         """
-        if self.res == None:
+        if self.res is None:
             raise Exception("Please run .estimate(npoles, nzeros) before plotting.")
         zeros = self.res.x[:self.nzeros]
         poles = self.res.x[self.nzeros:]
@@ -108,7 +108,7 @@ class tfest:
         """
         Plot the bode diagram
         """
-        if self.res == None:
+        if self.res is None:
             raise Exception("Please run .estimate(npoles, nzeros) before plotting.")
         tf = self.get_transfer_function()
         w, mag, phase = tf.bode()
@@ -118,7 +118,7 @@ class tfest:
         """
         Plot the bode diagram
         """
-        if self.res == None:
+        if self.res is None:
             raise Exception("Please run .estimate(npoles, nzeros) before plotting.")
         tf = self.get_transfer_function()
         w, mag, phase = tf.bode()
@@ -136,7 +136,7 @@ class tfest:
         """
         Plot the frequency response and the transfer function
         """
-        if self.res == None:
+        if self.res is None:
             raise Exception("Please run .estimate(npoles, nzeros) before plotting.")
         zeros = self.res.x[:self.nzeros]
         poles = self.res.x[self.nzeros:]

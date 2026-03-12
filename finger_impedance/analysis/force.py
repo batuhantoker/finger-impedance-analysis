@@ -8,9 +8,7 @@ import math
 
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.mlab import csd, psd
 from numpy.fft import fft
-from numpy.lib.stride_tricks import sliding_window_view
 from scipy.optimize import curve_fit
 
 from finger_impedance.core.functions import bode_plot, stiffness

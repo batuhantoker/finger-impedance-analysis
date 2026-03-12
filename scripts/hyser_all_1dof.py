@@ -4,12 +4,17 @@ Reads per-subject pickle files, computes normalized stiffness across 20 subjects
 and generates mean/max/std statistics with publication-quality plots.
 """
 
-import matplotlib.pyplot as plt
+import pickle
 
-from finger_impedance.core.functions import *
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from sklearn.preprocessing import MinMaxScaler
+
+from finger_impedance.core.functions import moving_average, pct_change
 
 try:
-    import scienceplots
+    import scienceplots  # noqa: F401
     plt.rcParams.update(plt.rcParamsDefault)
     plt.style.use(['science', 'no-latex', 'grid'])
 except ImportError:
@@ -147,9 +152,9 @@ df_max.columns = label_list
 df_max.index = force_labels
 df_std.columns = label_list
 df_std.index = force_labels
-df_mean.to_excel(f'hyser_means'+dataset+'.xlsx')
-df_max.to_excel(f'hyser_maxs'+dataset+'.xlsx')
-df_std.to_excel(f'hyser_stds'+dataset+'.xlsx')
+df_mean.to_excel('hyser_means'+dataset+'.xlsx')
+df_max.to_excel('hyser_maxs'+dataset+'.xlsx')
+df_std.to_excel('hyser_stds'+dataset+'.xlsx')
 plt.plot() #[[force_labels[finger_1]]]
 ax5=df_mean.T.plot(kind = "line",title = f"Mean of the estimated stiffness values for dataset {data_number} - {dataset}",color=finger_colors)
 pct=pct_change(df_mean.T)*100

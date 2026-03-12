@@ -5,6 +5,7 @@ mean/std/max statistics, exports to Excel, and generates publication plots.
 """
 
 import pickle
+from itertools import chain
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -27,8 +28,6 @@ ranges = {}
 means = np.empty((20, 6, 13))
 maxs = np.empty((20, 6, 13))
 stds = np.empty((20, 6, 13))
-
-from itertools import chain
 
 subject_range = chain(range(1, 5), range(6, 21))
 
