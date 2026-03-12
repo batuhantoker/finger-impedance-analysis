@@ -219,17 +219,14 @@ make docker-build
 
 ## Citation
 
-If you use this framework in your research, please cite:
+If you use this framework in your research, please cite this repository:
 
 ```bibtex
-@mastersthesis{yabgu2025finger,
-  author  = {Yabgu, Sik},
-  title   = {Finger Impedance Modulation Analysis Using High-Density
-             Surface Electromyography},
-  school  = {Sabanci University},
+@software{toker2025finger,
+  author  = {Toker, Batuhan},
+  title   = {Finger Impedance Analysis Framework},
+  url     = {https://github.com/batuhantoker/finger-impedance-analysis},
   year    = {2025},
-  address = {Istanbul, Turkey},
-  type    = {M.Sc. Thesis},
 }
 ```
 
