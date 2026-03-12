@@ -13,7 +13,7 @@ import numpy as np
 from scipy import signal
 from sklearn.cluster import MeanShift, estimate_bandwidth
 
-warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning)
+warnings.filterwarnings("ignore", category=np.exceptions.VisibleDeprecationWarning)
 
 
 def activation_map(data: np.ndarray, epoch: int) -> Tuple[
