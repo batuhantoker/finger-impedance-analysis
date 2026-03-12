@@ -1,6 +1,6 @@
 # Finger Impedance Analysis Framework
 
-[![CI](https://github.com/sikyabgu/finger-impedance-analysis/actions/workflows/ci.yml/badge.svg)](https://github.com/sikyabgu/finger-impedance-analysis/actions/workflows/ci.yml)
+[![CI](https://github.com/batuhantoker/finger-impedance-analysis/actions/workflows/ci.yml/badge.svg)](https://github.com/batuhantoker/finger-impedance-analysis/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.10%20|%203.11%20|%203.12-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE.md)
 
@@ -27,7 +27,7 @@ The pipeline supports both the [Hyser](https://physionet.org/content/hd-semg/) p
 
 ```bash
 # Clone the repository
-git clone https://github.com/sikyabgu/finger-impedance-analysis.git
+git clone https://github.com/batuhantoker/finger-impedance-analysis.git
 cd finger-impedance-analysis
 
 # Install the package with core dependencies

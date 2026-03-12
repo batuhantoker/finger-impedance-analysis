@@ -9,7 +9,7 @@ description = "Computational framework for finger impedance modulation, stiffnes
 readme = "README.md"
 license = { file = "LICENSE.md" }
 authors = [
-    { name = "Sik Yabgu", email = "sik@sabanciuniv.edu" },
+    { name = "Batuhan Toker", email = "bthntoker@gmail.com" },
 ]
 keywords = [
     "EMG", "finger", "impedance", "stiffness", "biomechanics",
@@ -58,9 +58,9 @@ all = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/sikyabgu/finger-impedance-analysis"
-Repository = "https://github.com/sikyabgu/finger-impedance-analysis"
-Issues = "https://github.com/sikyabgu/finger-impedance-analysis/issues"
+Homepage = "https://github.com/batuhantoker/finger-impedance-analysis"
+Repository = "https://github.com/batuhantoker/finger-impedance-analysis"
+Issues = "https://github.com/batuhantoker/finger-impedance-analysis/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
