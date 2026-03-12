@@ -4,13 +4,17 @@ Loads Hyser .mat files for multiple subjects, applies EMG filtering and
 feature extraction, estimates stiffness, and saves as pickle per subject.
 """
 
-import numpy as np
-import matplotlib.pyplot as plt
-import scipy.io
 import pickle
 
+import matplotlib.pyplot as plt
+import scipy.io
+
 from finger_impedance.core.functions import (
-    data_preprocess, force_mean, class_map, feature_extraction, force_stiffness
+    class_map,
+    data_preprocess,
+    feature_extraction,
+    force_mean,
+    force_stiffness,
 )
 
 dataset = "1dof"

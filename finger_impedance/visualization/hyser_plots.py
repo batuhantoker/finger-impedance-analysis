@@ -11,22 +11,12 @@ from typing import Dict
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LinearRegression, Ridge, ElasticNet
-from sklearn.model_selection import train_test_split
 from sklearn.neural_network import MLPRegressor
 from sklearn.preprocessing import MinMaxScaler
 
 from finger_impedance.core.functions import (
-    butter_lowpass_filter,
     evaluate_regression_metrics,
     moving_average,
-    mape,
-    nrmse1,
-    nrmse2,
-    r_square,
-    rmse,
-    rmspe,
-    vaf,
 )
 
 plt.style.use('bmh')

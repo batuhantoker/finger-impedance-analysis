@@ -16,10 +16,8 @@ import scipy.ndimage
 from matplotlib.widgets import Slider
 from scipy.signal import butter, lfilter
 from skimage.feature import (
-    canny,
     corner_harris,
     corner_peaks,
-    corner_subpix,
     hog,
     peak_local_max,
 )

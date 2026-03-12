@@ -18,14 +18,14 @@ Usage
 
 import numpy as np
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import cross_val_score, StratifiedKFold
+from sklearn.model_selection import StratifiedKFold, cross_val_score
 from sklearn.preprocessing import StandardScaler
 
 from finger_impedance import (
+    class_map,
     data_preprocess,
     feature_extraction,
     force_mean,
-    class_map,
 )
 
 # ── Configuration ─────────────────────────────────────────────────────────────

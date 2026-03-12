@@ -10,16 +10,11 @@ import pickle
 import matplotlib.pyplot as plt
 import numpy as np
 from sklearn import model_selection
-from sklearn.ensemble import AdaBoostClassifier, GradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, classification_report, make_scorer
 from sklearn.model_selection import train_test_split
-from sklearn.naive_bayes import GaussianNB
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
-from sklearn.tree import DecisionTreeClassifier
 
 
 def classification_report_with_accuracy_score(y_true: np.ndarray, y_pred: np.ndarray) -> float:

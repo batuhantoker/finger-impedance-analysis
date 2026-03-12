@@ -6,12 +6,11 @@ and ML classification helpers.
 """
 
 import math
-from typing import Dict, List, Optional, Tuple
+from typing import List, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from numpy.fft import fft
 from scipy import signal
 from scipy.signal import butter, lfilter
 from sklearn import model_selection
@@ -24,7 +23,6 @@ from sklearn.metrics import (
     mean_squared_error,
     r2_score,
 )
-from sklearn.preprocessing import MinMaxScaler
 from sklearn.svm import SVC
 
 from finger_impedance.core.tfestimate import tfest

@@ -16,7 +16,6 @@ from sklearn.preprocessing import MinMaxScaler
 from finger_impedance.core.functions import (
     evaluate_regression_metrics,
     moving_average,
-    pct_change,
 )
 
 if __name__ == "__main__":
