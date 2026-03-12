@@ -1,0 +1,21 @@
+name: finger-impedance
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - numpy>=1.24
+  - scipy>=1.10
+  - matplotlib>=3.7
+  - scikit-learn>=1.3
+  - pandas>=2.0
+  - h5py>=3.9
+  - openpyxl>=3.1
+  - pip
+  - pip:
+    - mat73>=0.60
+    - opencv-python>=4.8
+    - scikit-image>=0.21
+    - samplerate>=0.2
+    - scienceplots>=2.1
+    - finger-impedance-analysis
