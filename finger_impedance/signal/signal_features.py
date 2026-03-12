@@ -1,14 +1,35 @@
+"""HD-sEMG activation map feature extraction.
+
+Computes RMS-based activation maps and epoch-wise class labels from
+8x8 HD-sEMG grid data. Also provides Mean Shift clustering features.
+"""
+
+import math
 import pickle
+import warnings
+from typing import Tuple
+
 import numpy as np
 from scipy import signal
-import math
 from sklearn.cluster import MeanShift, estimate_bandwidth
-import warnings
 
-warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning)
+warnings.filterwarnings("ignore", category=np.exceptions.VisibleDeprecationWarning)
 
 
-def activation_map(data, epoch):
+def activation_map(data: np.ndarray, epoch: int) -> Tuple[
+    np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray,
+    np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray,
+]:
+    """Extract time-domain and frequency-domain features from multi-channel EMG.
+
+    Args:
+        data: 2D array of shape (n_samples, n_channels).
+        epoch: Number of samples per epoch window.
+
+    Returns:
+        Tuple of 10 feature arrays (RMS, MAV, IAV, VAR, WL, MF, PF, MP, TP, SM),
+        each of shape (n_segments, n_channels).
+    """
     number_of_segments = math.trunc(len(data) / epoch)
     splitted_data = np.split(
         data[0 : number_of_segments * epoch, :], number_of_segments
@@ -41,7 +62,16 @@ def activation_map(data, epoch):
     return RMS, MAV, IAV, VAR, WL, MF, PF, MP, TP, SM
 
 
-def class_map(data, epoch):
+def class_map(data: np.ndarray, epoch: int) -> np.ndarray:
+    """Compute epoch-wise RMS for class/label signals.
+
+    Args:
+        data: 1D label/class signal array.
+        epoch: Number of samples per epoch window.
+
+    Returns:
+        Array of shape (n_segments,) with RMS per epoch.
+    """
     number_of_segments = math.trunc(len(data) / epoch)
     splitted_data = np.split(data[0 : number_of_segments * epoch], number_of_segments)
     class_value = np.empty([number_of_segments])
@@ -50,85 +80,81 @@ def class_map(data, epoch):
     return class_value
 
 
-def butter_lowpass_filter(data, cutoff, fs, order=5):
-    b, a = butter_lowpass(cutoff, fs, order=order)
-    y = lfilter(b, a, data)
-    return y
+def mean_shift_feature(data_emg: np.ndarray) -> np.ndarray:
+    """Compute Mean Shift clustering labels for 8x8 EMG activation maps.
 
+    Args:
+        data_emg: 2D array of shape (n_samples, 64) representing flattened 8x8 grids.
 
-def butter_lowpass(cutoff, fs, order=5):
-    return butter(order, cutoff, fs=fs, btype="low", analog=False)
-
-
-def mean_shift_feature(data_emg):
-    # data_emg = np.reshape(data_emg, (len(data_emg), 8, 8))
-    # data_emg = data_emg.astype(np.float64)
+    Returns:
+        Cluster label array of shape (n_samples, 64), dtype object.
+    """
     labels = np.zeros((len(data_emg), 8, 8))
     for i in range(len(data_emg)):
         data = data_emg[i, :]
         data = np.reshape(data, (8, 8))
-        # resized_img = np.uint8((255 * (resized_img - np.min(resized_img)) / np.ptp(resized_img)).astype(int))
         flat_image = np.reshape(data, [-1, 1])
-        # Estimate bandwidth
         bandwidth2 = estimate_bandwidth(flat_image, quantile=0.1, n_samples=2500)
         ms = MeanShift(bandwidth=bandwidth2)
         ms.fit(flat_image)
-        labels[i, :, :] = np.reshape(ms.labels_, [8, 8])  # np.asarray(ms.labels_)
+        labels[i, :, :] = np.reshape(ms.labels_, [8, 8])
     labels = np.asarray(np.reshape(labels, (len(data_emg), 64)), dtype=object)
     return labels
 
 
-def data_reshape(data):
-    data = np.reshape(data, (len(data), 64))  # 8, 8
+def data_reshape(data: np.ndarray) -> np.ndarray:
+    """Reshape flat EMG data to (n_samples, 64) float64 format.
+
+    Args:
+        data: Input array of any shape with total elements divisible by 64.
+
+    Returns:
+        Array of shape (n_samples, 64) as float64.
+    """
+    data = np.reshape(data, (len(data), 64))
     data = data.astype(np.float64)
     return data
 
 
-# load data
-flex_pp = data_reshape(np.loadtxt("flex_pp.txt"))
-ext_pp = data_reshape(np.loadtxt("ext_pp.txt"))
-emg_class = np.loadtxt("emg_class.txt")
+if __name__ == "__main__":
+    flex_pp = data_reshape(np.loadtxt("flex_pp.txt"))
+    ext_pp = data_reshape(np.loadtxt("ext_pp.txt"))
+    emg_class = np.loadtxt("emg_class.txt")
 
-epoch = 100
-emg_class = class_map(emg_class, epoch)
-valid_classes = np.r_[np.array([i for i, v in enumerate(emg_class) if v.is_integer()])]
+    epoch = 100
+    emg_class = class_map(emg_class, epoch)
+    valid_classes = np.r_[np.array([i for i, v in enumerate(emg_class) if v.is_integer()])]
 
+    RMS, MAV, IAV, VAR, WL, MF, PF, MP, TP, SM = activation_map(ext_pp, epoch)
+    dict_ext = {
+        "rms_ext": RMS,
+        "mav_ext": MAV,
+        "iav_ext": IAV,
+        "var_ext": VAR,
+        "wl_ext": WL,
+        "mf_ext": MF,
+        "pf_ext": PF,
+        "mp_ext": MP,
+        "tp_ext": TP,
+        "sm_ext": SM,
+    }
+    RMS, MAV, IAV, VAR, WL, MF, PF, MP, TP, SM = activation_map(flex_pp, epoch)
+    dict_flex = {
+        "rms_flex": RMS,
+        "mav_flex": MAV,
+        "iav_flex": IAV,
+        "var_flex": VAR,
+        "wl_flex": WL,
+        "mf_flex": MF,
+        "pf_flex": PF,
+        "mp_flex": MP,
+        "tp_flex": TP,
+        "sm_flex": SM,
+    }
+    dict_target = {"movement_id": emg_class}
 
-RMS, MAV, IAV, VAR, WL, MF, PF, MP, TP, SM = activation_map(ext_pp, epoch)
-# MSF = mean_shift_feature(RMS)
-dict_ext = {
-    "rms_ext": RMS,
-    "mav_ext": MAV,
-    "iav_ext": IAV,
-    "var_ext": VAR,
-    "wl_ext": WL,
-    "mf_ext": MF,
-    "pf_ext": PF,
-    "mp_ext": MP,
-    "tp_ext": TP,
-    "sm_ext": SM,
-}  # , 'msf_ext':MSF
-RMS, MAV, IAV, VAR, WL, MF, PF, MP, TP, SM = activation_map(flex_pp, epoch)
-# MSF = mean_shift_feature(RMS)
-dict_flex = {
-    "rms_flex": RMS,
-    "mav_flex": MAV,
-    "iav_flex": IAV,
-    "var_flex": VAR,
-    "wl_flex": WL,
-    "mf_flex": MF,
-    "pf_flex": PF,
-    "mp_flex": MP,
-    "tp_flex": TP,
-    "sm_flex": SM,
-}  # , 'msf_flex':MSF
-dict_target = {"movement_id": emg_class}
-
-
-z = dict(dict_flex, **dict_ext)
-z2 = dict(z, **dict_target)
-print(z2.keys())
-with open("data11.pkl", "wb") as handle:
-    pickle.dump(z2, handle, protocol=pickle.HIGHEST_PROTOCOL)
-
-# data7 s1, data8 s2, data9 s3, data10 s4, data11 s1 50-63
+    z = dict(dict_flex, **dict_ext)
+    z2 = dict(z, **dict_target)
+    print(z2.keys())
+    with open("data11.pkl", "wb") as handle:
+        pickle.dump(z2, handle, protocol=pickle.HIGHEST_PROTOCOL)
