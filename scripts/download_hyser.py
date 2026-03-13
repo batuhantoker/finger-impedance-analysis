@@ -4,8 +4,7 @@ Usage
 -----
     python scripts/download_hyser.py --dest data/hyser
 
-PhysioNet credentials are required. Set them via environment variables
-PHYSIONET_USER and PHYSIONET_PASSWORD, or pass them on the command line.
+No credentials required — the Hyser dataset is open access.
 
 Dataset
 -------
@@ -14,7 +13,6 @@ https://physionet.org/content/hd-semg/1.0.0/
 """
 
 import argparse
-import os
 import sys
 import urllib.request
 from pathlib import Path
@@ -48,16 +46,16 @@ def build_file_list(full: bool) -> list[str]:
     return files
 
 
-def make_opener(username: str, password: str) -> urllib.request.OpenerDirector:
-    """Create a URL opener with HTTP Basic Auth."""
-    manager = urllib.request.HTTPPasswordMgrWithDefaultRealm()
-    manager.add_password(None, BASE_URL, username, password)
-    auth_handler = urllib.request.HTTPBasicAuthHandler(manager)
-    return urllib.request.build_opener(auth_handler)
+def _format_size(nbytes: int) -> str:
+    """Human-readable file size."""
+    for unit in ("B", "KB", "MB", "GB"):
+        if nbytes < 1024:
+            return f"{nbytes:.1f} {unit}"
+        nbytes /= 1024
+    return f"{nbytes:.1f} TB"
 
 
 def download_file(
-    opener: urllib.request.OpenerDirector,
     url: str,
     dest: Path,
     dry_run: bool = False,
@@ -70,33 +68,46 @@ def download_file(
     if dry_run:
         print(f"  [dry-run] would download {url}")
         return
-    print(f"  Downloading {url} → {dest}")
     try:
-        with opener.open(url) as response, open(dest, "wb") as out_file:
-            out_file.write(response.read())
+        with urllib.request.urlopen(url) as response:
+            total = int(response.headers.get("Content-Length", 0))
+            downloaded = 0
+            chunk_size = 1024 * 256  # 256 KB chunks
+            label = dest.name
+            if total:
+                print(f"  {label} ({_format_size(total)})")
+            else:
+                print(f"  {label}")
+            with open(dest, "wb") as out_file:
+                while True:
+                    chunk = response.read(chunk_size)
+                    if not chunk:
+                        break
+                    out_file.write(chunk)
+                    downloaded += len(chunk)
+                    if total:
+                        pct = downloaded / total * 100
+                        print(
+                            f"\r    {_format_size(downloaded)} / "
+                            f"{_format_size(total)} ({pct:.0f}%)",
+                            end="",
+                            flush=True,
+                        )
+            if total:
+                print()  # newline after progress
     except urllib.error.HTTPError as exc:
         print(f"  [warn] HTTP {exc.code} for {url}", file=sys.stderr)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Download the Hyser HD-sEMG dataset from PhysioNet.",
+        description="Download the Hyser HD-sEMG dataset from PhysioNet (open access).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
         "--dest",
         default="data/hyser",
         help="Local directory to save the dataset.",
-    )
-    parser.add_argument(
-        "--user",
-        default=os.environ.get("PHYSIONET_USER", ""),
-        help="PhysioNet username (or set PHYSIONET_USER env var).",
-    )
-    parser.add_argument(
-        "--password",
-        default=os.environ.get("PHYSIONET_PASSWORD", ""),
-        help="PhysioNet password (or set PHYSIONET_PASSWORD env var).",
     )
     parser.add_argument(
         "--all",
@@ -111,23 +122,14 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if not args.user or not args.password:
-        parser.error(
-            "PhysioNet credentials are required.\n"
-            "Set PHYSIONET_USER and PHYSIONET_PASSWORD environment variables,\n"
-            "or pass --user and --password on the command line.\n"
-            "Register at https://physionet.org/register/ if you don't have an account."
-        )
-
     dest_root = Path(args.dest)
     files = build_file_list(full=args.full)
-    opener = make_opener(args.user, args.password)
 
     print(f"Downloading {len(files)} files to {dest_root}/")
     for rel_path in files:
         url = urljoin(BASE_URL, rel_path)
         local_path = dest_root / rel_path
-        download_file(opener, url, local_path, dry_run=args.dry_run)
+        download_file(url, local_path, dry_run=args.dry_run)
 
     print("Done.")
     if not args.dry_run:

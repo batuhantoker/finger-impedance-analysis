@@ -167,13 +167,13 @@ Force and stiffness regression is evaluated with R², MAE, MSE, RMSE, nRMSE, and
 
 ### Hyser (Public)
 
-The [Hyser dataset](https://physionet.org/content/hd-semg/1.0.0/) provides HD-sEMG recordings from 20 subjects across 34 hand gestures. Download it with:
+The [Hyser dataset](https://physionet.org/content/hd-semg/1.0.0/) provides HD-sEMG recordings from 20 subjects across 34 hand gestures. It is open access — no account or credentials required. Download it with:
 
 ```bash
-export PHYSIONET_USER=your_username
-export PHYSIONET_PASSWORD=your_password
 python scripts/download_hyser.py --dest data/hyser
 ```
+
+Pass `--all` to include gesture protocol files (~35 GB total).
 
 Then run:
 ```bash
