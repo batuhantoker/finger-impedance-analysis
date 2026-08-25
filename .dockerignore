@@ -1,0 +1,13 @@
+**
+!.dockerignore
+!Dockerfile
+!pyproject.toml
+!uv.lock
+!README.md
+!LICENSE.md
+!finger_impedance/
+!finger_impedance/**
+!scripts/
+!scripts/**
+!examples/
+!examples/**
