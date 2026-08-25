@@ -4,80 +4,54 @@ Computes RMS-based activation maps and epoch-wise class labels from
 8x8 HD-sEMG grid data. Also provides Mean Shift clustering features.
 """
 
-import math
-import pickle
-import warnings
 from typing import Tuple
 
 import numpy as np
-from scipy import signal
 from sklearn.cluster import MeanShift, estimate_bandwidth
 
-warnings.filterwarnings("ignore", category=np.exceptions.VisibleDeprecationWarning)
+from finger_impedance.core.functions import class_map as core_class_map
+from finger_impedance.core.functions import feature_extraction
 
 
-def activation_map(data: np.ndarray, epoch: int) -> Tuple[
-    np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray,
-    np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray,
+def activation_map(
+    data: np.ndarray, epoch: int, fs: float
+) -> Tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
 ]:
     """Extract time-domain and frequency-domain features from multi-channel EMG.
 
     Args:
         data: 2D array of shape (n_samples, n_channels).
         epoch: Number of samples per epoch window.
+        fs: Sampling frequency in Hz.
 
     Returns:
         Tuple of 10 feature arrays (RMS, MAV, IAV, VAR, WL, MF, PF, MP, TP, SM),
         each of shape (n_segments, n_channels).
     """
-    number_of_segments = math.trunc(len(data) / epoch)
-    splitted_data = np.split(
-        data[0 : number_of_segments * epoch, :], number_of_segments
-    )
-    RMS = np.empty([number_of_segments, data.shape[1]])
-    MAV = np.empty([number_of_segments, data.shape[1]])
-    IAV = np.empty([number_of_segments, data.shape[1]])
-    VAR = np.empty([number_of_segments, data.shape[1]])
-    WL = np.empty([number_of_segments, data.shape[1]])
-    MF = np.empty([number_of_segments, data.shape[1]])
-    PF = np.empty([number_of_segments, data.shape[1]])
-    MP = np.empty([number_of_segments, data.shape[1]])
-    TP = np.empty([number_of_segments, data.shape[1]])
-    SM = np.empty([number_of_segments, data.shape[1]])
-    for i in range(number_of_segments):
-        RMS[i, :] = np.sqrt(np.mean(np.square(splitted_data[i]), axis=0))
-        MAV[i, :] = np.mean(np.abs(splitted_data[i]), axis=0)
-        IAV[i, :] = np.sum(np.abs(splitted_data[i]), axis=0)
-        VAR[i, :] = np.var(splitted_data[i], axis=0)
-        WL[i, :] = np.sum(np.diff(splitted_data[i], prepend=0), axis=0)
-        freq, power = signal.periodogram(splitted_data[i], axis=0)
-        fp = np.empty([len(freq), power.shape[1]])
-        for k in range(len(freq)):
-            fp[k] = power[k, :] * freq[k]
-        MF[i, :] = np.sum(fp, axis=0) / np.sum(power, axis=0)  # Mean frequency
-        PF[i, :] = freq[np.argmax(power, axis=0)]  # Peak frequency
-        MP[i, :] = np.mean(power, axis=0)  # Mean power
-        TP[i, :] = np.sum(power, axis=0)  # Total power
-        SM[i, :] = np.sum(fp, axis=0)  # Spectral moment
-    return RMS, MAV, IAV, VAR, WL, MF, PF, MP, TP, SM
+    return feature_extraction(data, epoch, fs)
 
 
 def class_map(data: np.ndarray, epoch: int) -> np.ndarray:
-    """Compute epoch-wise RMS for class/label signals.
+    """Return one label per pure epoch and NaN for transition epochs.
 
     Args:
         data: 1D label/class signal array.
         epoch: Number of samples per epoch window.
 
     Returns:
-        Array of shape (n_segments,) with RMS per epoch.
+        Array of shape (n_segments,) with one class per pure epoch.
     """
-    number_of_segments = math.trunc(len(data) / epoch)
-    splitted_data = np.split(data[0 : number_of_segments * epoch], number_of_segments)
-    class_value = np.empty([number_of_segments])
-    for i in range(number_of_segments):
-        class_value[i] = np.sqrt(np.mean(np.square(splitted_data[i])))
-    return class_value
+    return core_class_map(data, epoch)
 
 
 def mean_shift_feature(data_emg: np.ndarray) -> np.ndarray:
@@ -94,12 +68,13 @@ def mean_shift_feature(data_emg: np.ndarray) -> np.ndarray:
         data = data_emg[i, :]
         data = np.reshape(data, (8, 8))
         flat_image = np.reshape(data, [-1, 1])
+        if np.ptp(flat_image) == 0:
+            continue
         bandwidth2 = estimate_bandwidth(flat_image, quantile=0.1, n_samples=2500)
-        ms = MeanShift(bandwidth=bandwidth2)
+        ms = MeanShift(bandwidth=bandwidth2 if bandwidth2 > 0 else None)
         ms.fit(flat_image)
         labels[i, :, :] = np.reshape(ms.labels_, [8, 8])
-    labels = np.asarray(np.reshape(labels, (len(data_emg), 64)), dtype=object)
-    return labels
+    return np.reshape(labels, (len(data_emg), 64)).astype(int)
 
 
 def data_reshape(data: np.ndarray) -> np.ndarray:
@@ -114,47 +89,3 @@ def data_reshape(data: np.ndarray) -> np.ndarray:
     data = np.reshape(data, (len(data), 64))
     data = data.astype(np.float64)
     return data
-
-
-if __name__ == "__main__":
-    flex_pp = data_reshape(np.loadtxt("flex_pp.txt"))
-    ext_pp = data_reshape(np.loadtxt("ext_pp.txt"))
-    emg_class = np.loadtxt("emg_class.txt")
-
-    epoch = 100
-    emg_class = class_map(emg_class, epoch)
-    valid_classes = np.r_[np.array([i for i, v in enumerate(emg_class) if v.is_integer()])]
-
-    RMS, MAV, IAV, VAR, WL, MF, PF, MP, TP, SM = activation_map(ext_pp, epoch)
-    dict_ext = {
-        "rms_ext": RMS,
-        "mav_ext": MAV,
-        "iav_ext": IAV,
-        "var_ext": VAR,
-        "wl_ext": WL,
-        "mf_ext": MF,
-        "pf_ext": PF,
-        "mp_ext": MP,
-        "tp_ext": TP,
-        "sm_ext": SM,
-    }
-    RMS, MAV, IAV, VAR, WL, MF, PF, MP, TP, SM = activation_map(flex_pp, epoch)
-    dict_flex = {
-        "rms_flex": RMS,
-        "mav_flex": MAV,
-        "iav_flex": IAV,
-        "var_flex": VAR,
-        "wl_flex": WL,
-        "mf_flex": MF,
-        "pf_flex": PF,
-        "mp_flex": MP,
-        "tp_flex": TP,
-        "sm_flex": SM,
-    }
-    dict_target = {"movement_id": emg_class}
-
-    z = dict(dict_flex, **dict_ext)
-    z2 = dict(z, **dict_target)
-    print(z2.keys())
-    with open("data11.pkl", "wb") as handle:
-        pickle.dump(z2, handle, protocol=pickle.HIGHEST_PROTOCOL)

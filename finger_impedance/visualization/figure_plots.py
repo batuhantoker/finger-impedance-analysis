@@ -1,262 +1,254 @@
-"""Regression analysis pipeline for Malesevic dataset.
+"""Reusable plots for schema-v2 finger impedance datasets."""
 
-Loads preprocessed EMG features from pickle, trains MLP regressors to predict
-force/stiffness from EMG features, evaluates with multiple metrics, and generates
-publication-ready plots with movement annotations and per-finger comparisons.
-"""
-
-import pickle
+import argparse
+from collections.abc import Sequence
+from dataclasses import dataclass
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
-from sklearn.neural_network import MLPRegressor
-from sklearn.preprocessing import MinMaxScaler
+from matplotlib.axes import Axes
+from matplotlib.figure import Figure
 
-from finger_impedance.core.functions import (
-    evaluate_regression_metrics,
-    moving_average,
-)
+SCHEMA_VERSION = 2
+SCHEMA_VERSION_KEY = "schema_version"
+LABEL_KEYS = ("movement_id", "labels")
+REQUIRED_KEYS = ("co_contraction_index", "stiffness_proxy")
 
-if __name__ == "__main__":
-    plt.style.use('bmh')
-    plt.rcParams["axes.spines.right"] = False
-    plt.rcParams["axes.spines.top"] = False
-    plt.rcParams["figure.figsize"] = (20, 10)
-    with open('males/data_s1.pkl', 'rb') as handle:
-        data = pickle.load(handle)
 
-    target = 'f'  # s for stiffness f force
-    to_train = 0  # if 1 algorithm will be trained
-    if target == 'f':
-        filename = 'regression_force.sav'
-    else:
-        filename = 'regression_stiffness.sav'
+@dataclass(frozen=True)
+class PlotData:
+    """Validated arrays used by the impedance overview plot."""
 
-    (
-        rms_flex, mav_flex, iav_flex, var_flex, wl_flex, mf_flex, pf_flex, mp_flex,
-        tp_flex, sm_flex, msf_flex, rms_ext, mav_ext, iav_ext, var_ext, wl_ext,
-        mf_ext, pf_ext, mp_ext, tp_ext, sm_ext, msf_ext, movement_id, force,
-        stiffness_estimation,
-    ) = list(map(data.get, [
-        'rms_flex', 'mav_flex', 'iav_flex', 'var_flex', 'wl_flex', 'mf_flex',
-        'pf_flex', 'mp_flex', 'tp_flex', 'sm_flex', 'msf_flex',
-        'rms_ext', 'mav_ext', 'iav_ext', 'var_ext', 'wl_ext', 'mf_ext',
-        'pf_ext', 'mp_ext', 'tp_ext', 'sm_ext', 'msf_ext',
-        'movement_id', 'force', 'stiffness',
-    ]))
-    normalized_stiffness = stiffness_estimation
-    moav_stiffness = np.empty((normalized_stiffness.shape[0], normalized_stiffness.shape[1]))
-    index = 0
-    for i in stiffness_estimation.T:
-        moav_stiffness[:, index] = moving_average(i, 20)
-        index = index + 1
+    labels: np.ndarray
+    label_key: str
+    co_contraction_index: np.ndarray
+    stiffness_proxy: np.ndarray
+    force: np.ndarray | None = None
+    force_names: tuple[str, ...] | None = None
+    force_units: tuple[str, ...] | None = None
 
-    shape1, shape2 = moav_stiffness.shape
-    moav_stiffness = moav_stiffness.reshape(-1, 1)
-    scaler = MinMaxScaler(feature_range=(0, 100))
-    scaler.fit(moav_stiffness)
-    normalized_stiffness = scaler.transform(moav_stiffness).reshape(shape1, shape2)
-    normalized_stiffness[:, 7] = np.sqrt(
-        normalized_stiffness[:, 6] ** 2 + normalized_stiffness[:, 5] ** 2
-    )
 
-    shape1, shape2 = force.shape
-    force = force.reshape(-1, 1)
-    scaler = MinMaxScaler(feature_range=(-100, 100))
-    scaler.fit(force)
-    scaled_force = scaler.transform(force).reshape(shape1, shape2)
-    normalized_force = scaled_force
-    force = force.reshape(shape1, shape2)
-    max_ind_flex = []
-    max_ind_ext = []
-    for i in rms_flex:
-        max_ind_flex.append(np.argsort(i)[::-1][:10])
-    for i in rms_ext:
-        max_ind_ext.append(np.argsort(i)[::-1][:10])
+def _validate_schema_version(value: np.ndarray, path: Path) -> None:
+    version = np.asarray(value)
+    if version.size != 1 or str(version.item()).lower().removeprefix("v") not in {"2", "2.0"}:
+        raise ValueError(f"{path}: {SCHEMA_VERSION_KEY!r} must be {SCHEMA_VERSION}")
 
-    ind_flex = np.array(max_ind_flex)
-    ind_ext = np.array(max_ind_flex)
-    feat_ind = np.hstack((ind_flex, ind_ext))
 
-    ranges = {}
-    means = {}
-    label_list = [
-        'rest', 'Little\n finger:\n flex', 'Little\nfinger:\n extend',
-        'Ring\nfinger:\n flex', 'Ring\nfinger:\n extend',
-        'Middle\nfinger:\n flex', 'Middle\nfinger:\n extend',
-        'Index\nfinger:\n flex', 'Index\nfinger:\n extend',
-        'Thumb:\n down', 'Thumb:\n up', 'Thumb:\n left', 'Thumb:\n right',
-        'Wrist: bend', 'Wrist: rotate anti-clockwise', 'Wrist: rotate clockwise',
-        'Little finger: bend+Ring finger: bend',
-        'Little finger: bend+Thumb: down', 'Little finger: bend+Thumb: left',
-        'Little finger: bend+thumb: right', 'Little finger: bend+wrist: bend',
-        'Little finger: bend+Wrist: stretch',
-        'Little finger: bend+Wrist: rotate anti-clockwise',
-        'Little finger: bend+Wrist: rotate clockwise',
-        'Ring finger: bend+Middle finger: bend',
-        'Ring finger: bend+Thumb: down', 'Ring finger: bend+Thumb: left',
-        'Ring finger: bend+Thumb: right',
-        'Ring finger: bend+Wrist: bend', 'Ring finger: bend+Wrist: stretch',
-        'Ring finger: bend+Wrist: rotate anti-clockwise',
-        'Ring finger: bend+Wrist: rotate clockwise',
-        'Middle finger: bend+Index finger: bend',
-        'Middle finger: bend+Thumb: down', 'Middle finger: bend+Thumb: left',
-        'Middle finger: bend+Thumb: right',
-        'Middle finger: bend+Wrist: bend', 'Middle finger: bend+Wrist: stretch',
-        'Middle finger: bend+Wrist: rotate anti-clockwise',
-        'Middle finger: bend+Wrist: rotate clockwise',
-        'Index finger: bend+Thumb: down', 'Index finger: bend+Thumb: left',
-        'Index finger: bend+Thumb: right',
-        'Index finger: bend+Wrist: bend', 'Index finger: bend+Wrist: stretch',
-        'Index finger: bend+Wrist: rotate anti-clockwise',
-        'Index finger: bend+Wrist: rotate clockwise',
-        'Thumb: down+Thumb: left', 'Thumb: down+Thumb: right',
-        'Thumb: down+Thumb:bend', 'Thumb: down+Thumb:stretch',
-        'Thumb: down+Wrist: rotate anti-clockwise',
-        'Thumb: down+Wrist: rotate clockwise',
-        'Wrist: bend+Wrist: rotate anti-clockwise',
-        'Wrist: bend+Wrist: rotate clockwise',
-        'Wrist: stretch+Wrist: rotate anti-clockwise',
-        'Wrist: stretch+Wrist: rotate clockwise',
-        'Extend all fingers (without thumb)',
-        'All fingers: bend (without thumb)',
-        'Extend all fingers (without thumb)', 'Palmar grasp',
-        'Wrist: rotate anti-clockwise with the Palmar grasp',
-        'Pointing (index: stretch, all other: bend)',
-        '3-digit pinch', '3-digit pinch with Wrist: anti-clockwise rotation',
-        'Key grasp with Wrist: anti-clockwise rotation', '',
-    ]
+def _validate_labels(value: np.ndarray, key: str, path: Path) -> np.ndarray:
+    labels = np.asarray(value)
+    if labels.ndim != 1 or labels.size == 0:
+        raise ValueError(f"{path}: {key!r} must be a non-empty 1D array")
+    if labels.dtype.kind in "biuf":
+        if not np.all(np.isfinite(labels)):
+            raise ValueError(f"{path}: {key!r} must contain finite labels")
+    elif labels.dtype.kind not in "US":
+        raise ValueError(f"{path}: {key!r} must contain numeric or string labels")
+    return labels
 
-    force_labels = ['index', 'middle', 'ring', 'little', 'thumb left-right', 'thumb up-down', 'thumb accumulated']
-    finger_colors = ['black', 'blue', 'red', 'grey', 'teal', 'sienna', 'teal']
-    color_list = ['red', 'black', 'yellow'] * 30
 
-    finger_1 = 1
-    finger_2 = 2
-    fig2, ax2 = plt.subplots(2, 1)
-    for k in range(finger_1, finger_2):
-        ax2[0].plot(normalized_stiffness[:, k], label=force_labels[k], color=finger_colors[k])
-    ax2[0].set_ylabel('Estimated normalized stiffness (%)', fontsize=15)
-    ax2[0].set_yticks(
-        np.arange(0, 110, 10),
-        ['0', '10', '20', '30', '40', '50', '60', '70', '80', '90', '100'],
-    )
-    ax2[0].set_ylim(0, 110)
+def _validate_vector(
+    value: np.ndarray,
+    key: str,
+    sample_count: int,
+    path: Path,
+) -> np.ndarray:
+    array = np.asarray(value)
+    if array.ndim != 1 or array.shape[0] != sample_count:
+        raise ValueError(f"{path}: {key!r} must have shape ({sample_count},)")
+    if array.dtype.kind not in "biuf" or not np.all(np.isfinite(array)):
+        raise ValueError(f"{path}: {key!r} must contain finite numeric values")
+    return array.astype(float, copy=False)
 
-    for k in range(finger_1, finger_2):
-        ax2[1].plot(normalized_force[:, k], label=force_labels[k], color=finger_colors[k])
-    ax2[1].set_xlabel('time (epoch)', fontsize=15)
-    ax2[1].set_ylabel('Force percentage (%)', fontsize=15)
-    for i in np.unique(movement_id):
-        ranges[i] = np.where(movement_id == int(i))
-        data_range = np.r_[ranges[i][0]]
-        means[i] = np.round(np.mean(normalized_stiffness[data_range], axis=0), 2)
-        ax2[0].axvspan(
-            int(ranges[i][0][0]), int(ranges[i][0][-1]),
-            alpha=0.1,
-            color=color_list[np.where(np.unique(movement_id) == i)[0][0]],
-            label=label_list[int(i)],
+
+def _validate_force(value: np.ndarray, sample_count: int, path: Path) -> np.ndarray:
+    force = np.asarray(value)
+    if force.ndim not in (1, 2) or force.shape[0] != sample_count:
+        raise ValueError(
+            f"{path}: 'force' must have shape ({sample_count},) or ({sample_count}, n)"
         )
-        ax2[1].axvspan(
-            int(ranges[i][0][0]), int(ranges[i][0][-1]),
-            alpha=0.1,
-            color=color_list[np.where(np.unique(movement_id) == i)[0][0]],
+    if force.ndim == 2 and force.shape[1] == 0:
+        raise ValueError(f"{path}: 'force' must contain at least one channel")
+    if force.dtype.kind not in "biuf" or not np.all(np.isfinite(force)):
+        raise ValueError(f"{path}: 'force' must contain finite numeric values")
+    return force.astype(float, copy=False)
+
+
+def _validate_force_labels(
+    value: np.ndarray, key: str, channel_count: int, path: Path
+) -> tuple[str, ...]:
+    labels = np.asarray(value)
+    if labels.ndim != 1 or len(labels) != channel_count or labels.dtype.kind not in "US":
+        raise ValueError(f"{path}: '{key}' must contain one string per force channel")
+    return tuple(labels.astype(str))
+
+
+def load_plot_data(path: str | Path) -> PlotData:
+    """Load and validate one schema-v2 NPZ file without enabling pickle."""
+    input_path = Path(path)
+    with np.load(input_path, allow_pickle=False) as archive:
+        if SCHEMA_VERSION_KEY not in archive:
+            raise ValueError(f"{input_path}: missing required key {SCHEMA_VERSION_KEY!r}")
+        _validate_schema_version(archive[SCHEMA_VERSION_KEY], input_path)
+
+        label_key = next((key for key in LABEL_KEYS if key in archive), None)
+        if label_key is None:
+            choices = " or ".join(repr(key) for key in LABEL_KEYS)
+            raise ValueError(f"{input_path}: missing required label key {choices}")
+
+        missing = [key for key in REQUIRED_KEYS if key not in archive]
+        if missing:
+            raise ValueError(f"{input_path}: missing required keys: {', '.join(missing)}")
+
+        labels = _validate_labels(archive[label_key], label_key, input_path)
+        sample_count = labels.size
+        co_contraction = _validate_vector(
+            archive["co_contraction_index"],
+            "co_contraction_index",
+            sample_count,
+            input_path,
         )
-        ax2[0].annotate(label_list[int(i)], xy=(int(ranges[i][0][0]), 100), fontsize=15)
-    df = pd.DataFrame.from_dict(means).T
-    df.to_excel('means1.xlsx')
-
-    ax2[1].legend(loc='lower left', fontsize=15)
-    ax2[1].set_ylim(-100, 110)
-
-    rms_features = np.hstack((rms_flex, rms_ext))
-    wl_features = np.hstack((wl_flex, wl_ext))
-    tdf4 = np.hstack((rms_features, wl_features))
-    tp_features = np.hstack((tp_flex, tp_ext))
-    sm_features = np.hstack((sm_flex, sm_ext))
-    fd2 = np.hstack((tp_features, sm_features))
-    tfdf = np.hstack((fd2, tdf4))
-
-    X = tfdf
-    if target == 'f':
-        y = force[:, 0:6]
-    else:
-        y = normalized_stiffness[:, 0:6]
-
-    reg = {}
-    predicted_force = {}
-    score = pd.DataFrame()
-    if to_train == 1:
-        for i in range(6):
-            print(f'Regression for {i + 1}')
-            reg[i] = MLPRegressor(activation='tanh', random_state=1, max_iter=500).fit(X, y[:, i])
-        pickle.dump(reg, open(filename, 'wb'))
-    if to_train == 0:
-        reg = pickle.load(open(filename, 'rb'))
-
-    for i in range(6):
-        predicted_force[i] = reg[i].predict(X)
-
-    moav_predicted = np.empty((predicted_force[1].shape[0], 6))
-    moav_y = np.empty((predicted_force[1].shape[0], 6))
-    index = 0
-    for i in range(6):
-        moav_predicted[:, index] = moving_average(predicted_force[i][:], 20)
-        index = index + 1
-    predicted_force = moav_predicted.T
-    index = 0
-    for i in y.T:
-        moav_y[:, index] = moving_average(i, 20)
-        index = index + 1
-    force = moav_y
-    y = moav_y
-
-    score_rows = []
-    for i in range(6):
-        score_rows.append(evaluate_regression_metrics(predicted_force[i], y[:, i], force_labels[i]))
-    score = pd.concat(score_rows)
-
-    score.to_excel('regression_' + target + '1.xlsx')
-    print(score)
-    fig2, ax2 = plt.subplots(6)
-    ax2[0].plot(predicted_force[0], '--', label='index estimated')
-    ax2[0].plot(force[:, 0], label='index experimental')
-    ax2[1].plot(predicted_force[1], '--', label='middle estimated')
-    ax2[1].plot(force[:, 1], label='middle experimental')
-    ax2[2].plot(predicted_force[2], '--', label='ring estimated')
-    ax2[2].plot(force[:, 2], label='ring experimental')
-    ax2[3].plot(predicted_force[3], '--', label='little estimated')
-    ax2[3].plot(force[:, 3], label='little experimental')
-    ax2[4].plot(predicted_force[4], '--', label='thumb left/right estimated')
-    ax2[4].plot(force[:, 4], label='thumb left/right experimental')
-    ax2[-1].set_xlabel('time')
-    ax2[5].plot(predicted_force[5], '--', label='thumb up/down estimated')
-    ax2[5].plot(force[:, 5], label='thumb up/down experimental')
-
-    for ax in ax2:
-        ax.legend(loc=7)
-    for i in np.unique(movement_id):
-        ranges[i] = np.where(movement_id == int(i))
-        ax2[0].axvspan(
-            int(ranges[i][0][0]), int(ranges[i][0][-1]),
-            alpha=0.1,
-            color=color_list[np.where(np.unique(movement_id) == i)[0][0]],
-            label=label_list[int(i)],
+        stiffness = _validate_vector(
+            archive["stiffness_proxy"],
+            "stiffness_proxy",
+            sample_count,
+            input_path,
         )
-        ax2[0].annotate(label_list[int(i)], xy=(int(ranges[i][0][0]), 6), fontsize=10)
-        for j in range(1, 6):
-            ax2[j].axvspan(
-                int(ranges[i][0][0]), int(ranges[i][0][-1]),
-                alpha=0.1,
-                color=color_list[np.where(np.unique(movement_id) == i)[0][0]],
+        force = (
+            _validate_force(archive["force"], sample_count, input_path)
+            if "force" in archive
+            else None
+        )
+        force_units = None
+        force_names = None
+        if force is not None:
+            missing_force_metadata = [
+                key for key in ("force_names", "force_units") if key not in archive
+            ]
+            if missing_force_metadata:
+                raise ValueError(
+                    f"{input_path}: force data requires {', '.join(missing_force_metadata)}"
+                )
+            channel_count = 1 if force.ndim == 1 else force.shape[1]
+            force_names = _validate_force_labels(
+                archive["force_names"], "force_names", channel_count, input_path
+            )
+            force_units = _validate_force_labels(
+                archive["force_units"], "force_units", channel_count, input_path
             )
 
-    if target == 'f':
-        fig2.text(0.09, 0.5, 'Force (N)', va='center', rotation='vertical', fontsize=14)
-    else:
-        fig2.text(0.09, 0.5, 'Stiffness (%)', va='center', rotation='vertical', fontsize=14)
+    return PlotData(labels, label_key, co_contraction, stiffness, force, force_names, force_units)
 
-    figname = 'fig/est_' + target + '_' + '1.pdf'
-    fig2.savefig(figname, format='pdf')
-    plt.show()
+
+def _plot_labels(axis: Axes, samples: np.ndarray, data: PlotData) -> None:
+    labels = data.labels
+    if labels.dtype.kind in "US":
+        names, values = np.unique(labels.astype(str), return_inverse=True)
+        axis.step(samples, values, where="post")
+        axis.set_yticks(np.arange(names.size), names)
+    else:
+        axis.step(samples, labels, where="post")
+    axis.set_ylabel("Movement ID" if data.label_key == "movement_id" else "Label")
+
+
+def plot_activation_metrics(
+    data: PlotData,
+    *,
+    title: str | None = None,
+) -> tuple[Figure, np.ndarray]:
+    """Create aligned plots for labels, co-contraction, proxy, and force."""
+    include_force = data.force is not None
+    panel_count = 4 if include_force else 3
+    samples = np.arange(data.labels.size)
+
+    with plt.style.context("bmh"):
+        figure, axes = plt.subplots(
+            panel_count,
+            1,
+            figsize=(12, 2.4 * panel_count),
+            sharex=True,
+            constrained_layout=True,
+        )
+
+    axes = np.asarray(axes)
+    _plot_labels(axes[0], samples, data)
+    axes[1].plot(samples, data.co_contraction_index, color="tab:blue")
+    axes[1].set_ylabel("Co-contraction index")
+    axes[2].plot(samples, data.stiffness_proxy, color="tab:orange")
+    axes[2].set_ylabel("Stiffness proxy\n(dimensionless)")
+
+    if data.force is not None:
+        if data.force_names is None or data.force_units is None:
+            raise ValueError("force names and units are required when force data is present")
+        if data.force.ndim == 1:
+            axes[3].plot(
+                samples,
+                data.force,
+                color="tab:green",
+                label=data.force_names[0],
+            )
+            force_label = data.force_names[0]
+        else:
+            for channel, values in enumerate(data.force.T, start=1):
+                unit = data.force_units[channel - 1]
+                name = data.force_names[channel - 1]
+                axes[3].plot(samples, values, label=f"{name} [{unit}]")
+            if data.force.shape[1] > 1:
+                axes[3].legend(loc="best")
+            force_label = "Force"
+        unit_label = data.force_units[0] if len(set(data.force_units)) == 1 else "source units"
+        axes[3].set_ylabel(f"{force_label} [{unit_label}]")
+
+    axes[-1].set_xlabel("Epoch")
+    if title:
+        figure.suptitle(title)
+    return figure, axes
+
+
+def save_figure(
+    figure: Figure,
+    output_path: str | Path,
+    *,
+    overwrite: bool = False,
+) -> Path:
+    """Save a figure to an explicit path, refusing accidental replacement."""
+    path = Path(output_path)
+    if not path.suffix:
+        raise ValueError("output path must include a file extension")
+    if path.exists() and not overwrite:
+        raise FileExistsError(f"output already exists: {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(path)
+    return path
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Plot movement and activation metrics from one schema-v2 NPZ file."
+    )
+    parser.add_argument("input", type=Path, help="input schema-v2 NPZ file")
+    parser.add_argument("--output", "-o", required=True, type=Path, help="output figure path")
+    parser.add_argument("--title", help="optional figure title")
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="replace the output if it already exists",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run the schema-v2 plotting command."""
+    args = parse_args(argv)
+    data = load_plot_data(args.input)
+    figure, _ = plot_activation_metrics(data, title=args.title)
+    try:
+        save_figure(figure, args.output, overwrite=args.overwrite)
+    finally:
+        plt.close(figure)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

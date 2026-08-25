@@ -5,7 +5,8 @@ contraction percentages, local maxima detection, and image feature extraction
 (HoG, Harris corners, Canny edges, MeanShift clustering).
 """
 
-import math
+import argparse
+from pathlib import Path
 from typing import List, Tuple
 
 import cv2 as cv
@@ -24,9 +25,12 @@ from skimage.feature import (
 from skimage.transform import resize
 from sklearn.cluster import MeanShift, estimate_bandwidth
 
-# Module-level constants
-contraction_index = ["EMG1", "EMG2", "co-contraction"]
-epoch = 200
+from finger_impedance.core.functions import class_map as epoch_class_map
+from finger_impedance.core.functions import co_contraction_index
+
+contraction_index = ["Extensor", "Flexor", "Co-contraction"]
+DEFAULT_EPOCH_SIZE = 200
+DEFAULT_SAMPLING_FREQUENCY = 2048.0
 
 
 def auto_canny(image: np.ndarray, sigma: float = 0.33) -> np.ndarray:
@@ -48,7 +52,9 @@ def auto_canny(image: np.ndarray, sigma: float = 0.33) -> np.ndarray:
 
 def image_features(
     data: np.ndarray,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Tuple[float, float], np.ndarray]:
+) -> Tuple[
+    np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Tuple[float, float], np.ndarray
+]:
     """Extract image-based features from an EMG activation map.
 
     Computes Harris corners, HoG descriptors, Canny edges, MeanShift
@@ -61,17 +67,29 @@ def image_features(
         Tuple of (harris_coords, hog_image, canny_edges, resized_image,
                   meanshift_labels, center_of_gravity, max_coordinates).
     """
-    resized_img = resize(data, (32, 32))
-    resized_img = np.uint8((255 * (resized_img - np.min(resized_img)) / np.ptp(resized_img)).astype(int))
+    resized = resize(data, (32, 32), preserve_range=True)
+    if not np.all(np.isfinite(resized)):
+        raise ValueError("data must contain only finite values")
+    value_range = np.ptp(resized)
+    if value_range > 0:
+        resized_img = np.uint8(255 * (resized - np.min(resized)) / value_range)
+    else:
+        resized_img = np.zeros(resized.shape, dtype=np.uint8)
     coords_harris = corner_peaks(corner_harris(resized_img))
     canny_edges = auto_canny(resized_img)
-    fd, hog_image = hog(resized_img, visualize=True)
+    _, hog_image = hog(resized_img, visualize=True)
     flat_image = np.reshape(resized_img, [-1, 1])
     bandwidth2 = estimate_bandwidth(flat_image, quantile=0.1, n_samples=500)
-    ms = MeanShift(bandwidth=bandwidth2)
-    ms.fit(flat_image)
-    labels = np.reshape(ms.labels_, [32, 32])
-    cog = scipy.ndimage.center_of_mass(resized_img)
+    if np.isfinite(bandwidth2) and bandwidth2 > 0:
+        ms = MeanShift(bandwidth=bandwidth2)
+        ms.fit(flat_image)
+        labels = np.reshape(ms.labels_, [32, 32])
+    else:
+        labels = np.zeros(resized_img.shape, dtype=int)
+    if np.any(resized_img):
+        cog = scipy.ndimage.center_of_mass(resized_img)
+    else:
+        cog = tuple((size - 1) / 2 for size in resized_img.shape)
     coordinates_max = peak_local_max(resized_img, min_distance=1, num_peaks=3)
     return coords_harris, hog_image, canny_edges, resized_img, labels, cog, coordinates_max
 
@@ -119,11 +137,10 @@ def intensity_max(data: np.ndarray) -> Tuple[np.ndarray, float]:
     Returns:
         Tuple of (intensity_per_frame, max_intensity).
     """
-    It = np.empty(len(data))
-    for i in range(len(data)):
-        It[i] = np.sum(data[i, :, :])
-    It_max = np.amax(It)
-    return It, It_max
+    if data.ndim != 3 or len(data) == 0:
+        raise ValueError("data must have shape (frames, rows, columns)")
+    intensity = np.sum(data, axis=(1, 2))
+    return intensity, float(np.max(intensity))
 
 
 def mean_activation(am: np.ndarray) -> np.ndarray:
@@ -150,7 +167,7 @@ def local_maximum_pos(
     diff = (data_max - data_min) > threshold
     maxima[diff == 0] = 0
 
-    labeled, num_objects = scipy.ndimage.label(maxima)
+    labeled, _ = scipy.ndimage.label(maxima)
     slices = scipy.ndimage.find_objects(labeled)
     x, y = [], []
     for dy, dx in slices:
@@ -171,138 +188,131 @@ def activation_map(data: np.ndarray, epoch: int) -> np.ndarray:
     Returns:
         Activation maps of shape (n_segments, rows, cols).
     """
-    number_of_segments = math.trunc(len(data) / epoch)
-    splitted_data = np.split(data[0 : number_of_segments * epoch, :, :], number_of_segments)
-    AM = np.empty([number_of_segments, data.shape[1], data.shape[2]])
-    for i in range(number_of_segments):
-        AM[i, :, :] = np.sqrt(np.mean(np.square(splitted_data[i]), axis=0))
-    return AM
+    data = np.asarray(data, dtype=float)
+    if data.ndim != 3:
+        raise ValueError("data must have shape (samples, rows, columns)")
+    if epoch <= 0:
+        raise ValueError("epoch must be positive")
+    number_of_segments = len(data) // epoch
+    if number_of_segments == 0:
+        raise ValueError("data must contain at least one complete epoch")
+    segments = data[: number_of_segments * epoch].reshape(
+        number_of_segments, epoch, data.shape[1], data.shape[2]
+    )
+    return np.sqrt(np.mean(np.square(segments), axis=1))
 
 
 def class_map(data: np.ndarray, epoch: int) -> np.ndarray:
-    """Compute epoch-wise RMS for class/label signals."""
-    number_of_segments = math.trunc(len(data) / epoch)
-    splitted_data = np.split(data[0 : number_of_segments * epoch], number_of_segments)
-    class_value = np.empty([number_of_segments])
-    for i in range(number_of_segments):
-        class_value[i] = np.sqrt(np.mean(np.square(splitted_data[i])))
-    return class_value
+    """Return one class per pure epoch and NaN for transition epochs."""
+    return epoch_class_map(data, epoch)
 
 
 if __name__ == "__main__":
-    # Load and preprocess data
-    ext_raw = data_reshape(np.loadtxt("ext_raw.txt"))
-    ext_pp = data_reshape(np.loadtxt("ext_pp.txt"))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("extensor", type=Path, help="processed extensor text file")
+    parser.add_argument("flexor", type=Path, help="processed flexor text file")
+    parser.add_argument("labels", type=Path, help="sample-level label text file")
+    parser.add_argument(
+        "--epoch-size",
+        type=int,
+        default=DEFAULT_EPOCH_SIZE,
+        help=f"samples per epoch (default: {DEFAULT_EPOCH_SIZE})",
+    )
+    parser.add_argument(
+        "--sampling-frequency",
+        type=float,
+        default=DEFAULT_SAMPLING_FREQUENCY,
+        help=f"sampling frequency in Hz (default: {DEFAULT_SAMPLING_FREQUENCY:g})",
+    )
+    args = parser.parse_args()
+    if args.epoch_size <= 0:
+        parser.error("--epoch-size must be positive")
+    if not np.isfinite(args.sampling_frequency) or args.sampling_frequency <= 0:
+        parser.error("--sampling-frequency must be positive")
 
-    flex_raw = data_reshape(np.loadtxt("flex_raw.txt"))
-    flex_pp = data_reshape(np.loadtxt("flex_pp.txt"))
+    epoch = args.epoch_size
+    ext_pp = data_reshape(np.loadtxt(args.extensor))
+    flex_pp = data_reshape(np.loadtxt(args.flexor))
+    emg_class = np.loadtxt(args.labels)
 
-    emg_class = np.loadtxt("emg_class.txt")
-
-    def map_values(
-        i: int, epoch: int
-    ) -> Tuple[float, float, float, np.ndarray, np.ndarray, float, str]:
+    def map_values(i: int) -> Tuple[float, float, float, np.ndarray, np.ndarray, float, str]:
         """Get activation map values and metadata for a given epoch index."""
-        if emg_class[i * epoch] == 0:
+        if not np.isfinite(emg_class[i]):
+            current_action = "transition"
+        elif emg_class[i] == 0:
             current_action = "rest"
         else:
-            current_action = f"performing gesture {int(emg_class[i * epoch])}"
+            current_action = f"performing gesture {int(emg_class[i])}"
         Z0 = It_cc[i]
         Z = It_ext[i]
         Z1 = It_flex[i]
         Z2 = flex_pp[i, :, :]
         Z3 = ext_pp[i, :, :]
-        time_sec = round(i * 0.00048828125 * epoch, 3)
+        time_sec = round(i * epoch / args.sampling_frequency, 3)
         return Z0, Z, Z1, Z2, Z3, time_sec, current_action
 
     def update(val: float) -> None:
         """Update the interactive plot when the slider value changes."""
         current_i = s_factor.val
-        global cbar_lim2, neighborhood_size, threshold_max
-        Z0, Z, Z1, Z2, Z3, time_sec, current_action = map_values(
-            round(current_i * len(ext_pp) / 100), epoch
-        )
-        typedraw = "none"
-        im3 = axs[1].imshow(np.asarray(Z3), interpolation=typedraw)
+        index = round(current_i * (len(ext_pp) - 1) / 100)
+        Z0, Z, Z1, Z2, Z3, time_sec, current_action = map_values(index)
+        im3.set_data(Z3)
         im3.set_clim(vmin=0, vmax=np.max(cbar_lim2))
-        im4 = axs[2].imshow(np.asarray(Z2), interpolation=typedraw)
+        im4.set_data(Z2)
         im4.set_clim(vmin=0, vmax=np.max(cbar_lim2))
-        im3.set_cmap("jet")
-        im4.set_cmap("jet")
         x_ext, y_ext = local_maximum_pos(Z3, threshold_max * 0.2, neighborhood_size)
         x_flex, y_flex = local_maximum_pos(Z2, threshold_max * 0.2, neighborhood_size)
         ext_max.set_xdata(x_ext)
         ext_max.set_ydata(y_ext)
         flex_max.set_xdata(x_flex)
         flex_max.set_ydata(y_flex)
-        contraction_values = [Z / It_ext_max * 100, Z1 / It_flex_max * 100, Z0 / It_cc_max * 100]
+        contraction_values = [100 * Z, 100 * Z1, 100 * Z0]
 
         for rect, h in zip(im, contraction_values):
             rect.set_height(h)
-        global annotation0, annotation1, annotation2, cbar
-        annotation0.remove()
-        annotation1.remove()
-        annotation2.remove()
-        cbar = fig.colorbar(im3, cax=cbar_ax)
-        cbar.set_label("mV", rotation=90)
-        annotation0 = axs[0].annotate(
-            str(round(contraction_values[0])),
-            xy=(contraction_index[0], contraction_values[0]),
-            ha="center", va="bottom",
-        )
-        annotation1 = axs[0].annotate(
-            str(round(contraction_values[1])),
-            xy=(contraction_index[1], contraction_values[1]),
-            ha="center", va="bottom",
-        )
-        annotation2 = axs[0].annotate(
-            str(round(contraction_values[2])),
-            xy=(contraction_index[2], contraction_values[2]),
-            ha="center", va="bottom",
-        )
+        for annotation, label, value in zip(annotations, contraction_index, contraction_values):
+            annotation.set_text(str(round(value)))
+            annotation.set_position((label, value))
         text_time.set_text(f"time: {time_sec} seconds")
         text_action.set_text(current_action)
-        fig.canvas.draw()
+        cbar.update_normal(im3)
+        fig.canvas.draw_idle()
 
     ext_pp = activation_map(ext_pp, epoch)
     flex_pp = activation_map(flex_pp, epoch)
-
     emg_class = class_map(emg_class, epoch)
-    valid_classes = np.array([i for i, v in enumerate(emg_class) if v.is_integer()])
+    if not (len(ext_pp) == len(flex_pp) == len(emg_class)):
+        raise ValueError("extensor, flexor, and label inputs must contain the same epoch count")
+
+    It_ext, It_ext_max = intensity_max(ext_pp)
+    It_flex, It_flex_max = intensity_max(flex_pp)
+    if It_ext_max <= 0 or It_flex_max <= 0:
+        raise ValueError("extensor and flexor inputs must contain non-zero activation")
+    It_ext = It_ext / It_ext_max
+    It_flex = It_flex / It_flex_max
+    It_cc = co_contraction_index(It_flex, It_ext)
+    cbar_lim2 = [np.max(ext_pp), np.max(flex_pp)]
+    threshold_max = max(cbar_lim2)
+    neighborhood_size = 3
 
     # --- Interactive plot setup ---
 
     fig, axs = plt.subplots(nrows=1, ncols=3, figsize=(12, 5))
 
     plt.subplots_adjust(bottom=0.25)
-    axs[1].set_title("EMG1 ")
-    axs[2].set_title("EMG2")
-    axs[0].set_title("Contraction Percentages")
+    axs[1].set_title("Extensor")
+    axs[2].set_title("Flexor")
+    axs[0].set_title("Normalized activation")
 
-    Z0, Z, Z1, Z2, Z3, time_sec, current_action = map_values(0, epoch)
+    Z0, Z, Z1, Z2, Z3, time_sec, current_action = map_values(0)
 
-    It_ext, It_ext_max = intensity_max(ext_pp)
-    It_flex, It_flex_max = intensity_max(flex_pp)
-    It_cc, It_cc_max = intensity_max(ext_pp + flex_pp)
-
-    contraction_values = [Z / It_ext_max * 100, Z1 / It_flex_max * 100, Z0 / It_cc_max * 100]
+    contraction_values = [100 * Z, 100 * Z1, 100 * Z0]
     im = axs[0].bar(contraction_index, contraction_values)
 
-    annotation0 = axs[0].annotate(
-        str(round(contraction_values[0])),
-        xy=(contraction_index[0], contraction_values[0]),
-        ha="center", va="bottom",
-    )
-    annotation1 = axs[0].annotate(
-        str(round(contraction_values[1])),
-        xy=(contraction_index[1], contraction_values[1]),
-        ha="center", va="bottom",
-    )
-    annotation2 = axs[0].annotate(
-        str(round(contraction_values[2])),
-        xy=(contraction_index[2], contraction_values[2]),
-        ha="center", va="bottom",
-    )
+    annotations = [
+        axs[0].annotate(str(round(value)), xy=(label, value), ha="center", va="bottom")
+        for label, value in zip(contraction_index, contraction_values)
+    ]
 
     axs[0].set_ylim([0, 100])
 
@@ -318,10 +328,6 @@ if __name__ == "__main__":
     cbar_ax = fig.add_axes([0.88, 0.15, 0.04, 0.7])
     cbar = fig.colorbar(im3, cax=cbar_ax)
     cbar.set_label("mV", rotation=90)
-
-    cbar_lim2 = [np.max(ext_pp), np.max(flex_pp)]
-    threshold_max = max(cbar_lim2)
-    neighborhood_size = 3
 
     im3.set_clim(vmin=0, vmax=np.max(cbar_lim2))
     im4.set_clim(vmin=0, vmax=np.max(cbar_lim2))
@@ -354,14 +360,12 @@ if __name__ == "__main__":
 
     cbar2 = fig1.colorbar(im6, cax=cbar_ax2)
     cbar2.set_label("mV", rotation=90)
-    plt.savefig("data.png")
-
     s_factor.on_changed(update)
 
     # --- Image features plot ---
 
-    coords_harris, hog_image, canny_edges, resized_img, labels, cog, coordinates_max = image_features(
-        mean_activation(ext_pp)
+    coords_harris, hog_image, canny_edges, resized_img, labels, cog, coordinates_max = (
+        image_features(mean_activation(ext_pp))
     )
 
     fig2, axs2 = plt.subplots(nrows=2, ncols=4, figsize=(12, 5))
@@ -371,10 +375,17 @@ if __name__ == "__main__":
     axs2[0, 0].set_ylabel("Extensor", fontsize=18)
     axs2[0, 1].imshow(resized_img, cmap="jet", interpolation=typedraw)
     axs2[0, 1].plot(
-        coords_harris[:, 1], coords_harris[:, 0],
-        color="black", marker="o", linestyle="None", markersize=6, label="Harris",
+        coords_harris[:, 1],
+        coords_harris[:, 0],
+        color="black",
+        marker="o",
+        linestyle="None",
+        markersize=6,
+        label="Harris",
     )
-    axs2[0, 1].plot(cog[0], cog[1], color="magenta", marker="o", linestyle="None", markersize=6, label="CoG")
+    axs2[0, 1].plot(
+        cog[1], cog[0], color="magenta", marker="o", linestyle="None", markersize=6, label="CoG"
+    )
     axs2[0, 1].legend(loc="upper right")
     axs2[0, 2].imshow(canny_edges, interpolation=typedraw, label="Canny edges")
     axs2[0, 2].plot(coordinates_max[:, 1], coordinates_max[:, 0], "r*", label="Local max")
@@ -385,18 +396,22 @@ if __name__ == "__main__":
     axs2[0, 2].set_title("Canny edges and\n peak local max")
     axs2[0, 3].set_title("Mean shift\n features")
 
-    coords_harris, hog_image, canny_edges, resized_img, labels, cog, coordinates_max = image_features(
-        mean_activation(flex_pp)
+    coords_harris, hog_image, canny_edges, resized_img, labels, cog, coordinates_max = (
+        image_features(mean_activation(flex_pp))
     )
 
     axs2[1, 0].imshow(hog_image, cmap="jet", interpolation=typedraw)
     axs2[1, 0].set_ylabel("Flexor", fontsize=18)
     axs2[1, 1].imshow(resized_img, cmap="jet", interpolation=typedraw)
     axs2[1, 1].plot(
-        coords_harris[:, 1], coords_harris[:, 0],
-        color="black", marker="o", linestyle="None", markersize=6,
+        coords_harris[:, 1],
+        coords_harris[:, 0],
+        color="black",
+        marker="o",
+        linestyle="None",
+        markersize=6,
     )
-    axs2[1, 1].plot(cog[0], cog[1], color="magenta", marker="o", linestyle="None", markersize=6)
+    axs2[1, 1].plot(cog[1], cog[0], color="magenta", marker="o", linestyle="None", markersize=6)
     axs2[1, 2].imshow(canny_edges, interpolation=typedraw)
     axs2[1, 2].plot(coordinates_max[:, 1], coordinates_max[:, 0], "r*", label="Local max")
     axs2[1, 3].imshow(labels, cmap="jet")

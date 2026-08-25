@@ -1,108 +1,144 @@
-"""Quickstart — full pipeline demonstration using synthetic data.
+"""Fast, headless demonstration of the EMG analysis pipeline.
 
-This script illustrates the complete finger-impedance-analysis workflow:
+The example generates class-dependent flexor and extensor HD-sEMG, extracts
+time- and frequency-domain features, computes antagonist activation metrics,
+and evaluates movement classification. The stiffness proxy is based on
+normalized muscle activation; it is not a physical stiffness measurement.
 
-    1. Generate synthetic HD-sEMG data (8×8 flexor + 8×8 extensor channels)
-    2. Preprocess (bandpass filter + rectify)
-    3. Extract 10 time/freq domain features per epoch
-    4. Estimate epoch-wise stiffness from force signals
-    5. Run k-fold classification on extracted features
-
-No real data files are required — everything is synthetic, so you can run this
-script immediately after installing the package.
-
-Usage
------
-    python examples/quickstart.py
+Run with ``python examples/quickstart.py``.
 """
 
 import numpy as np
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import StratifiedKFold, cross_val_score
+from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from finger_impedance import (
     class_map,
+    co_contraction_index,
     data_preprocess,
     feature_extraction,
-    force_mean,
+    stiffness_proxy,
 )
 
-# ── Configuration ─────────────────────────────────────────────────────────────
+FS = 1024
+EPOCH = 256
+N_CHANNELS = 64
+N_CLASSES = 5
+EPOCHS_PER_CLASS = 6
+LOWCUT = 15.0
+HIGHCUT = 350.0
+RANDOM_STATE = 42
 
-FS = 2048          # Sampling frequency [Hz]
-DURATION = 10      # Signal duration [s]
-N_CHANNELS = 64    # 8×8 HD-sEMG grid (flexors or extensors)
-EPOCH = 256        # Samples per analysis window (~125 ms)
-N_CLASSES = 5      # Simulated finger movements
-N_FORCE_CH = 2     # Force sensor channels
-LOWCUT = 15.0      # Bandpass lower cutoff [Hz]
-HIGHCUT = 350.0    # Bandpass upper cutoff [Hz]
-LOWPASS_CUTOFF = 5.0  # (API compat, not used internally)
 
-rng = np.random.default_rng(42)
+def main() -> None:
+    """Run the synthetic end-to-end example."""
+    rng = np.random.default_rng(RANDOM_STATE)
+    samples_per_class = EPOCHS_PER_CLASS * EPOCH
+    labels_raw = np.repeat(np.arange(1, N_CLASSES + 1), samples_per_class)
+    n_samples = labels_raw.size
 
-# ── Step 1: Synthesise raw signals ────────────────────────────────────────────
+    raw_flexor = np.empty((n_samples, N_CHANNELS), dtype=np.float32)
+    raw_extensor = np.empty_like(raw_flexor)
+    channel_positions = np.arange(N_CHANNELS)
+    centers = np.linspace(6, N_CHANNELS - 7, N_CLASSES)
+    flexor_levels = np.array([1.00, 0.85, 0.65, 0.50, 0.35])
+    extensor_levels = np.array([0.25, 0.40, 0.70, 0.90, 1.10])
 
-n_samples = FS * DURATION
+    for class_index, class_label in enumerate(range(1, N_CLASSES + 1)):
+        mask = labels_raw == class_label
+        class_samples = int(mask.sum())
+        time = np.arange(class_samples) / FS
 
-# Raw EMG: Gaussian noise with class-dependent amplitude modulation
-raw_emg = rng.standard_normal((n_samples, N_CHANNELS)).astype(np.float32)
+        flexor_profile = 0.25 + np.exp(
+            -0.5 * ((channel_positions - centers[class_index]) / 6.0) ** 2
+        )
+        extensor_profile = 0.25 + np.exp(
+            -0.5 * ((channel_positions - centers[::-1][class_index]) / 6.0) ** 2
+        )
+        flexor_phase = rng.uniform(0, 2 * np.pi, N_CHANNELS)
+        extensor_phase = rng.uniform(0, 2 * np.pi, N_CHANNELS)
+        flexor_tone = np.sin(2 * np.pi * (45 + 18 * class_index) * time[:, None] + flexor_phase)
+        extensor_tone = np.sin(
+            2 * np.pi * (60 + 15 * (N_CLASSES - class_index)) * time[:, None] + extensor_phase
+        )
 
-# Class labels: repeat each class for equal duration
-labels_raw = np.repeat(np.arange(1, N_CLASSES + 1), n_samples // N_CLASSES)
-labels_raw = np.pad(labels_raw, (0, n_samples - len(labels_raw)), mode="edge")
+        raw_flexor[mask] = (
+            flexor_levels[class_index]
+            * flexor_profile
+            * (0.75 * rng.standard_normal((class_samples, N_CHANNELS)) + 0.25 * flexor_tone)
+        )
+        raw_extensor[mask] = (
+            extensor_levels[class_index]
+            * extensor_profile
+            * (0.75 * rng.standard_normal((class_samples, N_CHANNELS)) + 0.25 * extensor_tone)
+        )
 
-# Force signal: sinusoidal + noise, class-dependent amplitude
-force_signal = np.zeros((n_samples, N_FORCE_CH))
-for c in range(1, N_CLASSES + 1):
-    mask = labels_raw == c
-    amplitude = 1.0 + 0.5 * c
-    t = np.arange(mask.sum()) / FS
-    for ch in range(N_FORCE_CH):
-        force_signal[mask, ch] = amplitude * np.sin(2 * np.pi * 2 * t) + 0.1 * rng.standard_normal(mask.sum())
+    print(f"Flexor EMG shape:  {raw_flexor.shape}")
+    print(f"Extensor EMG shape: {raw_extensor.shape}")
 
-print(f"Raw EMG shape:    {raw_emg.shape}")
-print(f"Labels shape:     {labels_raw.shape}")
-print(f"Force shape:      {force_signal.shape}")
+    print("\n--- Preprocessing ---")
+    flexor_processed = data_preprocess(raw_flexor, FS, LOWCUT, HIGHCUT)
+    extensor_processed = data_preprocess(raw_extensor, FS, LOWCUT, HIGHCUT)
 
-# ── Step 2: Preprocess EMG ────────────────────────────────────────────────────
+    print("\n--- Feature Extraction ---")
+    flexor_features = feature_extraction(flexor_processed, EPOCH, FS)
+    extensor_features = feature_extraction(extensor_processed, EPOCH, FS)
+    n_segments = flexor_features[0].shape[0]
+    feature_matrix = np.concatenate((*flexor_features, *extensor_features), axis=1)
+    print(f"Segments extracted: {n_segments}")
+    print(f"Feature matrix:     {feature_matrix.shape}")
 
-print("\n--- Preprocessing ---")
-emg_processed = data_preprocess(raw_emg, FS, LOWCUT, HIGHCUT, LOWPASS_CUTOFF)
-print(f"Processed EMG shape: {emg_processed.shape}")
+    epoch_labels = class_map(labels_raw.astype(float), EPOCH)[:n_segments]
+    valid_epochs = np.isfinite(epoch_labels)
+    epoch_labels = epoch_labels[valid_epochs].astype(int)
+    feature_matrix = feature_matrix[valid_epochs]
 
-# ── Step 3: Extract features ──────────────────────────────────────────────────
+    flexor_activation = flexor_features[0][:n_segments].mean(axis=1)[valid_epochs]
+    extensor_activation = extensor_features[0][:n_segments].mean(axis=1)[valid_epochs]
+    reference_activation = max(flexor_activation.max(), extensor_activation.max())
+    normalized_flexor = flexor_activation / reference_activation
+    normalized_extensor = extensor_activation / reference_activation
+    co_contraction = co_contraction_index(normalized_flexor, normalized_extensor)
+    activation_stiffness = stiffness_proxy(normalized_flexor, normalized_extensor)
 
-print("\n--- Feature Extraction ---")
-RMS, MAV, IAV, VAR, WL, MF, PF, MP, TP, SM = feature_extraction(emg_processed, EPOCH)
-n_segments = RMS.shape[0]
-print(f"Segments extracted: {n_segments}")
-print(f"Feature shape (each): {RMS.shape}  [segments × channels]")
+    print("\n--- Antagonist Activation Metrics ---")
+    print(
+        "Co-contraction index: "
+        f"mean={co_contraction.mean():.3f}, range={np.ptp(co_contraction):.3f}"
+    )
+    print(
+        "Stiffness proxy:      "
+        f"mean={activation_stiffness.mean():.3f}, range={np.ptp(activation_stiffness):.3f}"
+    )
 
-# Concatenate all 10 features → flat feature matrix
-feature_matrix = np.concatenate([RMS, MAV, IAV, VAR, WL, MF, PF, MP, TP, SM], axis=1)
-print(f"Full feature matrix: {feature_matrix.shape}  [segments × (10 × channels)]")
+    print("\n--- Classification (Logistic Regression, 5-fold CV) ---")
+    model = Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            (
+                "classifier",
+                LogisticRegression(max_iter=500, random_state=RANDOM_STATE),
+            ),
+        ]
+    )
+    cross_validator = StratifiedKFold(
+        n_splits=5,
+        shuffle=True,
+        random_state=RANDOM_STATE,
+    )
+    scores = cross_val_score(
+        model,
+        feature_matrix,
+        epoch_labels,
+        cv=cross_validator,
+        scoring="accuracy",
+    )
+    print(f"Accuracy per fold: {scores.round(3)}")
+    print(f"Mean +/- std:      {scores.mean():.3f} +/- {scores.std():.3f}")
+    print("\nQuickstart complete.")
 
-# ── Step 4: Epoch-wise labels and force means ─────────────────────────────────
 
-epoch_labels = class_map(labels_raw.astype(float), EPOCH).round().astype(int)
-epoch_labels = epoch_labels[:n_segments]
-
-force_means = force_mean(force_signal, EPOCH)
-print(f"\nEpoch labels shape:  {epoch_labels.shape}")
-print(f"Force means shape:   {force_means.shape}")
-
-# ── Step 5: Classify movements ────────────────────────────────────────────────
-
-print("\n--- Classification (Logistic Regression, 5-fold CV) ---")
-scaler = StandardScaler()
-X = scaler.fit_transform(feature_matrix[:n_segments])
-y = epoch_labels
-
-cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-scores = cross_val_score(LogisticRegression(max_iter=500), X, y, cv=cv, scoring="accuracy")
-print(f"Accuracy per fold: {scores.round(3)}")
-print(f"Mean ± std:        {scores.mean():.3f} ± {scores.std():.3f}")
-
-print("\nQuickstart complete.")
+if __name__ == "__main__":
+    main()

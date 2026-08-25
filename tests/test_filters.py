@@ -1,15 +1,14 @@
 """Tests for Butterworth filter design and application."""
 
 import numpy as np
-import pytest
 
 from finger_impedance.core.functions import (
     butter_bandpass,
     butter_lowpass,
     butter_lowpass_filter,
+    data_preprocess,
     zero_lag_filter,
 )
-
 
 FS = 2048
 N = 4096
@@ -44,6 +43,12 @@ class TestButterLowpass:
         y_high = butter_lowpass_filter(x_high, 100.0, FS, order=4)
         assert np.std(y_low) > np.std(y_high) * 10
 
+    def test_multichannel_filter_uses_sample_axis(self):
+        x = np.repeat(_sine(10.0)[:, np.newaxis], 4, axis=1)
+        y = butter_lowpass_filter(x, 100.0, FS, order=4)
+
+        np.testing.assert_allclose(y[:, 0], y[:, -1])
+
 
 class TestButterBandpass:
     def test_returns_ba_tuple(self):
@@ -74,3 +79,18 @@ class TestZeroLagFilter:
         x = _sine(1.0)
         y = zero_lag_filter(x, 15.0, 350.0, FS, order=4)
         assert np.std(y) < 0.1
+
+    def test_multichannel_data_is_filtered_over_time(self):
+        x = np.repeat(_sine(100.0)[:, np.newaxis], 64, axis=1)
+        y = zero_lag_filter(x, 15.0, 350.0, FS, order=4)
+
+        assert y.shape == x.shape
+        assert np.std(y[:, 0]) > 0.5
+        np.testing.assert_allclose(y[:, 0], y[:, -1])
+
+
+def test_preprocessing_preserves_signed_signal_for_spectral_features():
+    processed = data_preprocess(_sine(100.0), FS, 15.0, 350.0)
+
+    assert np.min(processed) < -0.5
+    assert np.max(processed) > 0.5

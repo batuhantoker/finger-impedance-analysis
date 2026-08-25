@@ -1,101 +1,168 @@
-"""Force-based stiffness estimation pipeline.
+"""Estimate quasi-static stiffness from synchronized displacement and force."""
 
-Demonstrates stiffness extraction from force data using FFT-based transfer
-function estimation and curve fitting to a spring model (K/s).
-"""
+from __future__ import annotations
 
-import math
+import argparse
+from collections.abc import Sequence
+from pathlib import Path
 
-import matplotlib.pyplot as plt
 import numpy as np
-from numpy.fft import fft
-from scipy.optimize import curve_fit
 
-from finger_impedance.core.functions import bode_plot, stiffness
-from finger_impedance.core.tfestimate import tfest
+from finger_impedance.core import estimate_stiffness
 
-np.seterr(divide="ignore")
+SCHEMA_VERSION = 2
+REQUIRED_KEYS = ("displacement", "force", "epoch", "force_unit", "displacement_unit")
+
+
+def _load_unit(value: np.ndarray, key: str, path: Path) -> str:
+    array = np.asarray(value)
+    if array.size != 1 or array.dtype.kind not in "SU":
+        raise ValueError(f"{path}: '{key}' must be a scalar string")
+    unit_value = array.item()
+    if isinstance(unit_value, bytes):
+        try:
+            unit_value = unit_value.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"{path}: '{key}' must be valid UTF-8") from exc
+    unit = str(unit_value).strip()
+    if not unit:
+        raise ValueError(f"{path}: '{key}' must not be empty")
+    return unit
+
+
+def _load_epoch(value: np.ndarray, path: Path) -> int:
+    array = np.asarray(value)
+    if array.size != 1 or array.dtype.kind not in "iuf":
+        raise ValueError(f"{path}: 'epoch' must be a positive integer")
+    epoch_value = float(array.item())
+    if not np.isfinite(epoch_value) or not epoch_value.is_integer() or epoch_value <= 0:
+        raise ValueError(f"{path}: 'epoch' must be a positive integer")
+    return int(epoch_value)
+
+
+def _load_signal(value: np.ndarray, key: str, path: Path) -> np.ndarray:
+    array = np.asarray(value)
+    if array.ndim not in (1, 2) or array.shape[0] == 0:
+        raise ValueError(f"{path}: '{key}' must have shape (samples,) or (samples, channels)")
+    if array.ndim == 2 and array.shape[1] == 0:
+        raise ValueError(f"{path}: '{key}' must contain at least one channel")
+    if array.dtype.kind not in "iuf" or not np.all(np.isfinite(array)):
+        raise ValueError(f"{path}: '{key}' must contain finite numeric values")
+    return array.astype(float, copy=False)
+
+
+def load_force_displacement_file(path: str | Path) -> dict[str, np.ndarray | int | str]:
+    """Load the synchronized signals, epoch, and explicit units from an NPZ file."""
+    input_path = Path(path)
+    with np.load(input_path, allow_pickle=False) as archive:
+        missing = [key for key in REQUIRED_KEYS if key not in archive]
+        if missing:
+            raise ValueError(f"{input_path}: missing required keys: {', '.join(missing)}")
+        try:
+            displacement = _load_signal(archive["displacement"], "displacement", input_path)
+            force = _load_signal(archive["force"], "force", input_path)
+            epoch = _load_epoch(archive["epoch"], input_path)
+            force_unit = _load_unit(archive["force_unit"], "force_unit", input_path)
+            displacement_unit = _load_unit(
+                archive["displacement_unit"], "displacement_unit", input_path
+            )
+        except ValueError as exc:
+            if str(exc).startswith(str(input_path)):
+                raise
+            raise ValueError(f"{input_path}: could not safely load required arrays: {exc}") from exc
+
+    if displacement.shape != force.shape:
+        raise ValueError(
+            f"{input_path}: 'displacement' and 'force' must have identical synchronized shapes"
+        )
+    return {
+        "displacement": displacement,
+        "force": force,
+        "epoch": epoch,
+        "force_unit": force_unit,
+        "displacement_unit": displacement_unit,
+    }
+
+
+def estimate_stiffness_from_npz(
+    input_path: str | Path,
+    output_path: str | Path,
+    *,
+    overwrite: bool = False,
+    min_displacement_range: float = 0.0,
+) -> np.ndarray:
+    """Estimate true quasi-static stiffness and save a safe schema-v2 NPZ result."""
+    inputs = load_force_displacement_file(input_path)
+    displacement = inputs["displacement"]
+    force = inputs["force"]
+    epoch = inputs["epoch"]
+    if not isinstance(displacement, np.ndarray) or not isinstance(force, np.ndarray):
+        raise TypeError("validated displacement and force inputs must be arrays")
+    if not isinstance(epoch, int):
+        raise TypeError("validated epoch must be an integer")
+
+    stiffness = estimate_stiffness(
+        displacement,
+        force,
+        epoch,
+        min_displacement_range=min_displacement_range,
+    )
+    if not np.all(np.isfinite(stiffness)):
+        raise ValueError("stiffness estimation produced non-finite values")
+
+    force_unit = str(inputs["force_unit"])
+    displacement_unit = str(inputs["displacement_unit"])
+    path = Path(output_path)
+    if path.suffix != ".npz":
+        raise ValueError("output path must end in .npz")
+    if path.exists() and not overwrite:
+        raise FileExistsError(f"output already exists: {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        path,
+        schema_version=np.asarray(SCHEMA_VERSION, dtype=np.int64),
+        stiffness=stiffness,
+        epoch=np.asarray(epoch, dtype=np.int64),
+        force_unit=np.asarray(force_unit),
+        displacement_unit=np.asarray(displacement_unit),
+        stiffness_unit=np.asarray(f"{force_unit}/{displacement_unit}"),
+        min_displacement_range=np.asarray(min_displacement_range, dtype=np.float64),
+    )
+    return stiffness
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build the measured quasi-static stiffness argument parser."""
+    parser = argparse.ArgumentParser(
+        description=(
+            "Estimate quasi-static stiffness from synchronized displacement and force in an NPZ "
+            "file. The input must include epoch, force_unit, and displacement_unit."
+        )
+    )
+    parser.add_argument("input", type=Path, help="input force/displacement NPZ file")
+    parser.add_argument("output", type=Path, help="output schema-v2 stiffness NPZ file")
+    parser.add_argument(
+        "--min-displacement-range",
+        type=float,
+        default=0.0,
+        help="minimum resolvable displacement range in the declared displacement unit",
+    )
+    parser.add_argument("--overwrite", action="store_true", help="replace an existing output")
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run the measured quasi-static stiffness CLI."""
+    args = build_parser().parse_args(argv)
+    stiffness = estimate_stiffness_from_npz(
+        args.input,
+        args.output,
+        overwrite=args.overwrite,
+        min_displacement_range=args.min_displacement_range,
+    )
+    print(f"Saved {stiffness.shape[0]} stiffness epochs to {args.output}")
+    return 0
+
 
 if __name__ == "__main__":
-    plt.rcParams["figure.figsize"] = (20, 20)
-    plt.rcParams.update({"font.size": 18})
-    plt.style.use("bmh")
-    plt.rcParams["axes.spines.right"] = False
-    plt.rcParams["axes.spines.top"] = False
-    plt.rcParams["figure.figsize"] = (20, 10)
-
-    force = np.loadtxt("force.txt")
-    epoch = 100
-    window_size = epoch * 2
-    number_of_segments = math.trunc(len(force) / epoch)
-
-    # sampling rate
-    sr = 2048
-    # sampling interval
-    ts = 1.0 / sr
-    x = force[2000:2100, 2]
-    y = np.ones(len(x))
-    plt.figure()
-    plt.plot(x)
-    plt.title("Finger force over an epoch")
-    plt.xlabel("Time [sample]")
-    plt.ylabel("Force [N]")
-    tf = tfest(y, x)
-    tf.estimate(0, 0, sr, method="fft")
-    w1, mag1 = tf.bode_estimate()
-    plt.figure()
-
-    print(mag1[0])
-    tf2 = tfest(y, x)
-    tf2.estimate(1, 0, sr, method="fft")
-    w2, mag2 = tf2.bode_estimate()
-    tf3 = tfest(y, x)
-    tf3.estimate(2, 0, sr, method="fft")
-    w3, mag3 = tf3.bode_estimate()
-    bode_plot(w2, mag1)
-    bode_plot(w2, mag2)
-    bode_plot(w2, mag3)
-
-    plt.legend(
-        ["Spring estimation", "Spring-damper estimation", "Mass-spring-damper estimation"]
-    )
-    plt.xlabel("Frequency [Hz]")
-    plt.ylabel("Magnitude")
-    plt.show()
-
-    tf.plot_bode()
-
-    print(tf)
-    X = fft(x)
-    X = np.nan_to_num(X)
-    N = len(X)
-    n = np.arange(N)
-    T = N / sr
-    freq = np.fft.fftfreq(len(x), ts) * 6.28
-    t = np.arange(0, ts * N, ts)
-    X = X[1:]
-    freq = freq[1:]
-    X = X[: len(X) // 2]
-    freq = freq[: len(freq) // 2]
-
-    amp = 20 * np.log10((np.absolute(X)))
-    popt, pcov = curve_fit(stiffness, freq, (np.absolute(X)))
-    rsquare = 1 - np.sum((np.absolute(X) - stiffness(freq, *popt)) ** 2) / np.sum(
-        (np.absolute(X) - np.mean(np.absolute(X))) ** 2
-    )
-
-    print(popt, rsquare)
-    fig, ax = plt.subplots()
-    ax.plot(freq, amp, "*k", label="Experimental data")
-    ax.plot(
-        freq,
-        20 * np.log10(stiffness(freq, *popt)),
-        "r-",
-        label=f"Curve fitted, R2={round(rsquare,2)}",
-    )
-    ax.set_xlabel("Freq (rad/s)")
-    ax.set_ylabel("FFT Magnitude |F(freq)| [dB]")
-    box = ax.get_position()
-    ax.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-    ax.legend(loc="center left", bbox_to_anchor=(1, 0.5))
-    plt.show()
+    raise SystemExit(main())
