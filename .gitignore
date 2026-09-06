@@ -36,5 +36,8 @@ data/
 *.png
 *.pdf
 
+# Local report
+/report/Progress_Report__PhD__Copy_/
+
 # Claude
 .claude/
